@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ESP32 Alarm</title>
+<style>
+:root{--bg:#eef3f6;--card:#ffffff;--ink:#173042;--muted:#637684;--line:#cfdbe3;--accent:#0b7fab;--accent2:#e98a15}
+body{margin:0;padding:14px;background:linear-gradient(180deg,#edf4f8,#dde9ef);color:var(--ink);font-family:Verdana,sans-serif}
+.wrap{max-width:860px;margin:0 auto}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:12px;box-shadow:0 8px 24px rgba(18,48,66,.08)}
+.hero{display:flex;justify-content:space-between;gap:12px;align-items:flex-end;flex-wrap:wrap}
+.clock{font-size:42px;font-weight:700;letter-spacing:.04em;color:var(--accent)}
+.sub{color:var(--muted);margin-top:4px}
+.status{font-size:14px;padding:10px 12px;border-radius:10px;background:#e8f4f8;color:#16546d}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+label{display:block;font-size:13px;font-weight:700;margin-bottom:6px}
+input,select,button{width:100%;box-sizing:border-box;border-radius:10px;border:1px solid var(--line);padding:10px 12px;font-size:15px}
+button{background:var(--accent);border:0;color:#fff;font-weight:700;cursor:pointer}
+button.alt{background:var(--accent2)}
+button.ghost{background:#5d7280}
+.schedule{display:grid;gap:8px}
+.day{display:grid;grid-template-columns:72px 100px 1fr;gap:10px;align-items:center;padding:8px 0;border-top:1px solid #edf2f5}
+.day:first-child{border-top:0}
+.tiny{font-size:12px;color:var(--muted)}
+@media (max-width:640px){.day{grid-template-columns:1fr}.clock{font-size:34px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card hero">
+    <div>
+      <div class="clock" id="currentTime">--:--:--</div>
+      <div class="sub" id="currentDate">--</div>
+    </div>
+    <div class="status" id="statusBox">Verbonden</div>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h3>Tijd</h3>
+      <div class="row">
+        <div>
+          <label for="timeInput">Tijd</label>
+          <input id="timeInput" type="time" value="12:00">
+        </div>
+        <div>
+          <label for="secInput">Seconde</label>
+          <input id="secInput" type="number" min="0" max="59" value="0">
+        </div>
+      </div>
+      <p class="tiny">Direct handmatig de klok zetten.</p>
+      <button onclick="setTimeValue()">Tijd opslaan</button>
+    </div>
+
+    <div class="card">
+      <h3>NTP en Tijdzone</h3>
+      <label for="timezoneInput">Tijdzone</label>
+      <select id="timezoneInput">
+        <option value="Europe/Amsterdam">Europe/Amsterdam</option>
+        <option value="UTC">UTC</option>
+        <option value="UTC+1">UTC+1</option>
+        <option value="UTC+2">UTC+2</option>
+        <option value="UTC-1">UTC-1</option>
+        <option value="UTC-2">UTC-2</option>
+      </select>
+      <div class="row" style="margin-top:10px">
+        <button onclick="saveTimezone()">Tijdzone opslaan</button>
+        <button class="alt" onclick="syncNtp()">Sync met NTP</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Alarmmuziek</h3>
+    <div class="grid">
+      <div>
+        <label for="toneInput">Muziek</label>
+        <select id="toneInput"></select>
+      </div>
+      <div>
+        <label for="volumeInput">Volume %</label>
+        <input id="volumeInput" type="number" min="0" max="100" value="70">
+      </div>
+      <div>
+        <label for="testSecondsInput">Testduur sec</label>
+        <input id="testSecondsInput" type="number" min="1" max="60" value="10">
+      </div>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <button onclick="saveAlarmSettings()">Muziek opslaan</button>
+      <button class="alt" onclick="testAlarm()">Muziek testen</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Alarm per dag</h3>
+    <div class="schedule" id="scheduleRoot"></div>
+    <button style="margin-top:10px" onclick="saveSchedule()">Weekschema opslaan</button>
+  </div>
+</div>
+
+<script>
+const days=[['mon','Maandag'],['tue','Dinsdag'],['wed','Woensdag'],['thu','Donderdag'],['fri','Vrijdag'],['sat','Zaterdag'],['sun','Zondag']]
+let editingUntil=0
+let tonesSignature=''
+
+function z(n){return String(n).padStart(2,'0')}
+function markEditing(){editingUntil=Date.now()+4000}
+function isEditing(){return Date.now()<editingUntil}
+function setStatus(text,isError){const box=document.getElementById('statusBox');box.textContent=text;box.style.background=isError?'#fdeaea':'#e8f4f8';box.style.color=isError?'#8f2929':'#16546d'}
+function bindEditor(id){const el=document.getElementById(id);if(!el)return;['focus','input','change'].forEach(evt=>el.addEventListener(evt,markEditing))}
+async function apiPost(url,payload){const res=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload||{})});return res.json().catch(()=>({ok:false}))}
+
+function renderSchedule(schedule){
+  const root=document.getElementById('scheduleRoot')
+  root.innerHTML=days.map(([key,label])=>{const row=schedule[key]||{enabled:false,hour:7,minute:0};return `<div class="day"><div>${label}</div><label><input id="enabled-${key}" type="checkbox" ${row.enabled?'checked':''}> actief</label><input id="time-${key}" type="time" value="${z(row.hour)}:${z(row.minute)}"></div>`}).join('')
+  days.forEach(([key])=>{bindEditor(`enabled-${key}`);bindEditor(`time-${key}`)})
+}
+
+async function refresh(){
+  try{
+    const res=await fetch('/api/time')
+    const data=await res.json()
+    document.getElementById('currentTime').textContent=`${z(data.hour)}:${z(data.minute)}:${z(data.second)}`
+    document.getElementById('currentDate').textContent=`${data.weekday_name} ${z(data.day)}-${z(data.month)}-${data.year} (${data.timezone_label})`
+
+    if(!isEditing()){
+      document.getElementById('timeInput').value=`${z(data.hour)}:${z(data.minute)}`
+      document.getElementById('secInput').value=data.second
+      document.getElementById('timezoneInput').value=data.timezone_name||'Europe/Amsterdam'
+      const toneSelect=document.getElementById('toneInput')
+      const newSignature=JSON.stringify(data.alarm_tones||[])
+      if(newSignature!==tonesSignature){
+        tonesSignature=newSignature
+        toneSelect.innerHTML=(data.alarm_tones||[]).map(t=>`<option value="${t.key}">${t.label}</option>`).join('')
+      }
+      toneSelect.value=data.alarm_tone||'classic'
+      document.getElementById('volumeInput').value=data.alarm_volume??70
+      renderSchedule(data.alarm_schedule||{})
+    }
+    setStatus('Verbonden en bijgewerkt',false)
+  }catch(err){
+    setStatus('Fout bij ophalen status',true)
+  }
+}
+
+async function setTimeValue(){
+  markEditing()
+  const parts=document.getElementById('timeInput').value.split(':').map(Number)
+  const second=Number(document.getElementById('secInput').value||0)
+  const out=await apiPost('/api/set-time',{hour:parts[0],minute:parts[1],second})
+  setStatus(out.ok?'Tijd opgeslagen':'Tijd opslaan mislukt',!out.ok)
+  editingUntil=0
+  refresh()
+}
+
+async function saveTimezone(){
+  markEditing()
+  const out=await apiPost('/api/set-timezone',{timezone:document.getElementById('timezoneInput').value})
+  setStatus(out.ok?'Tijdzone opgeslagen':'Tijdzone opslaan mislukt',!out.ok)
+  editingUntil=0
+  refresh()
+}
+
+async function syncNtp(){
+  const out=await apiPost('/api/sync-ntp',{})
+  setStatus(out.ok?'NTP sync gelukt':'NTP sync mislukt',!out.ok)
+  refresh()
+}
+
+async function saveAlarmSettings(){
+  markEditing()
+  const out=await apiPost('/api/set-alarm-settings',{tone:document.getElementById('toneInput').value,volume:Number(document.getElementById('volumeInput').value||70)})
+  setStatus(out.ok?'Muziek opgeslagen':'Muziek opslaan mislukt',!out.ok)
+  editingUntil=0
+  refresh()
+}
+
+async function testAlarm(){
+  const out=await apiPost('/api/test-alarm',{seconds:Number(document.getElementById('testSecondsInput').value||10)})
+  setStatus(out.ok?'Alarmtest gestart':'Alarmtest mislukt',!out.ok)
+}
+
+async function saveSchedule(){
+  markEditing()
+  const schedule={}
+  days.forEach(([key])=>{const parts=document.getElementById(`time-${key}`).value.split(':').map(Number);schedule[key]={enabled:document.getElementById(`enabled-${key}`).checked,hour:parts[0],minute:parts[1]}})
+  const out=await apiPost('/api/set-alarm-schedule',{alarm_schedule:schedule})
+  setStatus(out.ok?'Weekschema opgeslagen':'Weekschema opslaan mislukt',!out.ok)
+  editingUntil=0
+  refresh()
+}
+
+['timeInput','secInput','timezoneInput','toneInput','volumeInput','testSecondsInput'].forEach(bindEditor)
+refresh()
+setInterval(()=>{if(!isEditing())refresh()},1500)
+</script>
+</body>
+</html>
