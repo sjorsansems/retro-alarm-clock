@@ -91,8 +91,8 @@ class ConfigManager:
         return {
             "wifi": {
                 "mode": "sta",
-                "ssid": "SL2",
-                "password": "anuslikker101",
+                "ssid": "SL2_IOT",
+                "password": "anuslikker102",
                 "channel": 6
             },
             "ntp": {

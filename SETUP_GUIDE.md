@@ -149,3 +149,48 @@ Als het OLED/RTC niet detecteert wordt, voeg 4.7kΩ pull-up weerstanden toe:
 - Controleer GPIO27 wiring
 - Zorg voor 330Ω weerstand tussen GPIO27 en buzzer+
 - Pas `buzzer_volume` aan in code (250-1000 Hz)
+
+## 🌈 LED Thema Kleurschema (per spel)
+
+Bevestigde werkende WS2812 setup:
+- Data pin: GPIO2
+- Methode: bitstream
+- Byte-order: GRB
+
+Kleurschema per lied/spel:
+
+1. Zelda
+- Groen naar goud pulse
+- R 0..200, G 200..255, B 0
+
+2. Mario
+- Rood en geel checker-patroon
+- (255,0,0) en (255,255,0)
+
+3. Synthwave
+- Neon roze naar paars golf
+- (255,0,100) naar (150,0,255)
+
+4. Sonic
+- Cyaan/blauw strobe
+- (0,200..250,255) en (0,100,200)
+
+5. Metroid
+- Oranje naar rood (intensiteit-gedreven)
+- R 255 vast, G 200..100, B 0
+
+6. Pokemon
+- Geel met rode accenten, knipperend
+- (255,255,0) en (255,0,0)
+
+7. Tetris
+- Regenboogcyclus
+- Rood -> oranje -> geel -> groen -> blauw -> indigo -> violet
+
+8. Moonstone
+- Maanblauw met fakkel-gouden pulse
+- Basis ongeveer (40,80,180) met warme fakkel-accenten
+
+9. Arcade
+- Multicolor strobe
+- Rood -> geel -> groen -> blauw -> magenta

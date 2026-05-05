@@ -15,16 +15,17 @@ body{margin:0;padding:14px;background:linear-gradient(180deg,#edf4f8,#dde9ef);co
 .status{font-size:14px;padding:10px 12px;border-radius:10px;background:#e8f4f8;color:#16546d}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
 .row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.tone-scheme{margin-top:10px;padding:10px 12px;border:1px dashed var(--line);border-radius:10px;background:#f7fbfd;color:#24485c;font-size:14px}
 label{display:block;font-size:13px;font-weight:700;margin-bottom:6px}
 input,select,button{width:100%;box-sizing:border-box;border-radius:10px;border:1px solid var(--line);padding:10px 12px;font-size:15px}
 button{background:var(--accent);border:0;color:#fff;font-weight:700;cursor:pointer}
 button.alt{background:var(--accent2)}
 button.ghost{background:#5d7280}
 .schedule{display:grid;gap:8px}
-.day{display:grid;grid-template-columns:72px 100px 1fr;gap:10px;align-items:center;padding:8px 0;border-top:1px solid #edf2f5}
+.day{display:grid;grid-template-columns:72px 100px 1fr 100px;gap:10px;align-items:center;padding:8px 0;border-top:1px solid #edf2f5}
 .day:first-child{border-top:0}
 .tiny{font-size:12px;color:var(--muted)}
-@media (max-width:640px){.day{grid-template-columns:1fr}.clock{font-size:34px}}
+@media (max-width:640px){.day{grid-template-columns:1fr;grid-template-rows:auto auto auto auto}.clock{font-size:34px}}
 </style>
 </head>
 <body>
@@ -73,10 +74,10 @@ button.ghost{background:#5d7280}
   </div>
 
   <div class="card">
-    <h3>Alarmmuziek</h3>
+    <h3>Alarm liedje</h3>
     <div class="grid">
       <div>
-        <label for="toneInput">Muziek</label>
+        <label for="toneInput">Liedje (SD-kaart)</label>
         <select id="toneInput"></select>
       </div>
       <div>
@@ -89,9 +90,28 @@ button.ghost{background:#5d7280}
       </div>
     </div>
     <div class="row" style="margin-top:10px">
-      <button onclick="saveAlarmSettings()">Muziek opslaan</button>
-      <button class="alt" onclick="testAlarm()">Muziek testen</button>
+      <button onclick="saveAlarmSettings()">Liedje opslaan</button>
+      <button class="alt" onclick="testAlarm()">Liedje testen</button>
     </div>
+    <div class="tone-scheme" id="toneScheme">Kleurschema: -</div>
+  </div>
+
+  <div class="card">
+    <h3>&#127918; Klok-transities testen</h3>
+    <p style="font-size:13px;color:var(--muted);margin:0 0 10px">Start een animatie op het OLED-scherm. Werkt alleen als er geen alarm actief is.</p>
+    <div class="row" style="margin-bottom:8px">
+      <button onclick="testTransition(-1)" class="alt">&#x1F3B2; Random</button>
+      <button onclick="testTransition(0)" style="background:#0088cc">&#x1F7E6; Tetris</button>
+    </div>
+    <div class="row" style="margin-bottom:8px">
+      <button onclick="testTransition(1)" style="background:#228822">&#x1F47E; Space Invaders</button>
+      <button onclick="testTransition(2)" style="background:#00aa55">&#x1F7E9; Matrix regen</button>
+    </div>
+    <div class="row">
+      <button onclick="testTransition(3)" style="background:#cc9900">&#x1F7E1; Pac-Man</button>
+      <button onclick="testTransition(4)" style="background:#555">&#x1F4FA; CRT power-on</button>
+    </div>
+    <div id="transitionStatus" style="margin-top:8px;font-size:13px;color:var(--muted)"></div>
   </div>
 
   <div class="card">
@@ -105,6 +125,7 @@ button.ghost{background:#5d7280}
 const days=[['mon','Maandag'],['tue','Dinsdag'],['wed','Woensdag'],['thu','Donderdag'],['fri','Vrijdag'],['sat','Zaterdag'],['sun','Zondag']]
 let editingUntil=0
 let tonesSignature=''
+let toneMap={}
 
 function z(n){return String(n).padStart(2,'0')}
 function markEditing(){editingUntil=Date.now()+4000}
@@ -112,11 +133,13 @@ function isEditing(){return Date.now()<editingUntil}
 function setStatus(text,isError){const box=document.getElementById('statusBox');box.textContent=text;box.style.background=isError?'#fdeaea':'#e8f4f8';box.style.color=isError?'#8f2929':'#16546d'}
 function bindEditor(id){const el=document.getElementById(id);if(!el)return;['focus','input','change'].forEach(evt=>el.addEventListener(evt,markEditing))}
 async function apiPost(url,payload){const res=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload||{})});return res.json().catch(()=>({ok:false}))}
+function updateToneScheme(){const sel=document.getElementById('toneInput');const box=document.getElementById('toneScheme');if(!sel||!box)return;const t=toneMap[sel.value];if(!t){box.textContent='Kleurschema: onbekend';return}box.textContent=`Kleurschema (${t.label}): ${t.scheme||'onbekend'}`}
 
-function renderSchedule(schedule){
+function renderSchedule(schedule, toneOptions, alarmCombo){
   const root=document.getElementById('scheduleRoot')
-  root.innerHTML=days.map(([key,label])=>{const row=schedule[key]||{enabled:false,hour:7,minute:0};return `<div class="day"><div>${label}</div><label><input id="enabled-${key}" type="checkbox" ${row.enabled?'checked':''}> actief</label><input id="time-${key}" type="time" value="${z(row.hour)}:${z(row.minute)}"></div>`}).join('')
-  days.forEach(([key])=>{bindEditor(`enabled-${key}`);bindEditor(`time-${key}`)})
+  const toneOptionsHtml=(toneOptions||[]).map(t=>`<option value="${t.key}">${t.label}</option>`).join('')
+  root.innerHTML=days.map(([key,label])=>{const row=schedule[key]||{enabled:false,hour:7,minute:0};const dayTone=alarmCombo?.[key]||'1';return `<div class="day"><div>${label}</div><label><input id="enabled-${key}" type="checkbox" ${row.enabled?'checked':''}> actief</label><input id="time-${key}" type="time" value="${z(row.hour)}:${z(row.minute)}"><select id="tone-${key}">${toneOptionsHtml}</select></div>`}).join('')
+  days.forEach(([key])=>{bindEditor(`enabled-${key}`);bindEditor(`time-${key}`);bindEditor(`tone-${key}`);document.getElementById(`tone-${key}`).value=alarmCombo?.[key]||'1'})
 }
 
 async function refresh(){
@@ -134,11 +157,14 @@ async function refresh(){
       const newSignature=JSON.stringify(data.alarm_tones||[])
       if(newSignature!==tonesSignature){
         tonesSignature=newSignature
+        toneMap={}
+        ;(data.alarm_tones||[]).forEach(t=>toneMap[t.key]=t)
         toneSelect.innerHTML=(data.alarm_tones||[]).map(t=>`<option value="${t.key}">${t.label}</option>`).join('')
       }
       toneSelect.value=data.alarm_tone||'classic'
+      updateToneScheme()
       document.getElementById('volumeInput').value=data.alarm_volume??70
-      renderSchedule(data.alarm_schedule||{})
+      renderSchedule(data.alarm_schedule||{},data.alarm_tones||[],data.alarm_combo||{})
     }
     setStatus('Verbonden en bijgewerkt',false)
   }catch(err){
@@ -186,14 +212,34 @@ async function testAlarm(){
 async function saveSchedule(){
   markEditing()
   const schedule={}
-  days.forEach(([key])=>{const parts=document.getElementById(`time-${key}`).value.split(':').map(Number);schedule[key]={enabled:document.getElementById(`enabled-${key}`).checked,hour:parts[0],minute:parts[1]}})
-  const out=await apiPost('/api/set-alarm-schedule',{alarm_schedule:schedule})
+  const alarmCombo={}
+  days.forEach(([key])=>{const parts=document.getElementById(`time-${key}`).value.split(':').map(Number);schedule[key]={enabled:document.getElementById(`enabled-${key}`).checked,hour:parts[0],minute:parts[1]};alarmCombo[key]=document.getElementById(`tone-${key}`).value})
+  const out=await apiPost('/api/set-alarm-schedule',{alarm_schedule:schedule,alarm_combo:alarmCombo})
   setStatus(out.ok?'Weekschema opgeslagen':'Weekschema opslaan mislukt',!out.ok)
   editingUntil=0
   refresh()
 }
 
+const TRANSITION_NAMES=['Tetris','Space Invaders','Matrix regen','Pac-Man','CRT power-on']
+async function testTransition(id){
+  const box=document.getElementById('transitionStatus')
+  const label=id<0?'Random':TRANSITION_NAMES[id]
+  box.textContent='⏳ Bezig: '+label+'...'
+  try{
+    const out=await apiPost('/api/test-transition',{id})
+    if(out.ok){
+      const name=TRANSITION_NAMES[out.id]||'?'
+      box.textContent='✓ Gespeeld: '+name+' (id '+out.id+')'
+    } else {
+      box.textContent='✗ Fout: '+(out.error||'onbekend')
+    }
+  }catch(e){
+    box.textContent='✗ Verbindingsfout'
+  }
+}
+
 ['timeInput','secInput','timezoneInput','toneInput','volumeInput','testSecondsInput'].forEach(bindEditor)
+document.getElementById('toneInput').addEventListener('change',updateToneScheme)
 refresh()
 setInterval(()=>{if(!isEditing())refresh()},1500)
 </script>
