@@ -105,14 +105,15 @@ ALARM_BOSS_MS = 20000
 ALARM_AUTO_STOP_MS = 15 * 60 * 1000
 NIGHT_DIM_START_HOUR = 22
 NIGHT_DIM_END_HOUR = 7
-UP_BUTTON_PIN = 13    # Touch13 / ADC2_2 — vrij op S3 DevKitC-1
-DOWN_BUTTON_PIN = 12  # Touch12 / ADC2_1 — vrij
+UP_BUTTON_PIN = 12    # Touch12 / ADC2_1 — omgewisseld op verzoek
+DOWN_BUTTON_PIN = 13  # Touch13 / ADC2_2 — omgewisseld op verzoek
 SET_BUTTON_PIN = 14   # Touch14 / ADC2_3 — vrij
 DAY_KEYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 
 # Aantal MP3-nummers op de SD-kaart (lied 1 t/m N)
 DFPLAYER_TRACK_COUNT = 30
 SCHEDULE_NAMED_TONE_MAX = 22
+ALARM_REPEAT_MS = 45000  # herstart track pas na ruime speeltijd (voorkomt vroeg afkappen)
 
 # Koppel GIF-namen aan een alarm-tone (muziek + LEDs).
 # Voeg hier nieuwe GIFs toe die je aan een specifiek liedje wilt koppelen.
@@ -638,6 +639,8 @@ class App:
         self.dfplayer = None
         self._dfplayer_failed = False
         self._dfplayer_playing = False
+        self._dfplayer_track_num = None
+        self._dfplayer_last_start_ms = 0
 
         self.leds = None
         self._leds_failed = False
@@ -680,7 +683,7 @@ class App:
         # - UP heeft geen lange druk → vuurt pending="short" direct bij indrukken
         # - SET/DOWN wachten tot loslaten om te bepalen of het kort of lang was
         _bs = self._button_state
-        def _make_irq(name, has_long_cb):
+        def _make_irq(name, has_long_cb, long_ms=0):
             s = _bs[name]
             def handler(p):
                 now = time.ticks_ms()
@@ -699,11 +702,18 @@ class App:
                         s["fired_long"] = True
                 else:  # rising edge = losgelaten
                     if has_long_cb and not s["fired_long"]:
-                        s["pending"] = "short"  # was een korte druk
+                        held_ms = time.ticks_diff(now, s["start"]) if s["start"] > 0 else 0
+                        # Fallback: als de poll-loop de lange druk net miste,
+                        # herken hem alsnog netjes bij loslaten.
+                        if long_ms > 0 and held_ms >= long_ms:
+                            s["pending"] = "long"
+                            s["fired_long"] = True
+                        else:
+                            s["pending"] = "short"
             return handler
-        self.btn_up.irq(trigger=Pin.IRQ_FALLING | Pin.IRQ_RISING, handler=_make_irq("up", False))
-        self.btn_down.irq(trigger=Pin.IRQ_FALLING | Pin.IRQ_RISING, handler=_make_irq("down", True))
-        self.btn_set.irq(trigger=Pin.IRQ_FALLING | Pin.IRQ_RISING, handler=_make_irq("set", True))
+        self.btn_up.irq(trigger=Pin.IRQ_FALLING | Pin.IRQ_RISING, handler=_make_irq("up", False, 0))
+        self.btn_down.irq(trigger=Pin.IRQ_FALLING | Pin.IRQ_RISING, handler=_make_irq("down", True, 3000))
+        self.btn_set.irq(trigger=Pin.IRQ_FALLING | Pin.IRQ_RISING, handler=_make_irq("set", True, 2200))
 
         print("WiFi: verbinden...")
         gc.collect()
@@ -938,6 +948,10 @@ class App:
         for k in DAY_KEYS:
             val = raw.get(k, "random")
             if isinstance(val, str):
+                # Lege waarde betekent: geen GIF forceren, gebruik tone-keuze.
+                if val == "":
+                    out[k] = ""
+                    continue
                 safe = "".join(c for c in val if ('a' <= c <= 'z') or ('A' <= c <= 'Z') or ('0' <= c <= '9') or c in ('-', '_'))
                 safe = safe[:32]
                 out[k] = safe if safe else "random"
@@ -1142,6 +1156,8 @@ class App:
             except Exception:
                 pass
         self._dfplayer_playing = False
+        self._dfplayer_track_num = None
+        self._dfplayer_last_start_ms = 0
         self._intro_audio_playing = False
         if self.leds is not None:
             try:
@@ -1476,7 +1492,7 @@ class App:
     def _handle_buttons(self):
         now = time.ticks_ms()
         buttons = [
-            ("set",  self._set_short_press,  self._set_long_press,  self.btn_set,  3000),
+            ("set",  self._set_short_press,  self._set_long_press,  self.btn_set,  2200),
             ("up",   self._up_short_press,    None,                  self.btn_up,   0),
             ("down", self._down_short_press,  self._down_long_press, self.btn_down, 3000),
         ]
@@ -1569,15 +1585,30 @@ class App:
                     track = DFPLAYER_TRACK_COUNT
                 dfvol = max(0, min(30, int(self.volume * 30 // 100) + self._alarm_boss_level() * 3))
                 self.dfplayer.set_volume(dfvol)
-                
-                # Herhaal muziek elke ~20 sec (MP3's zijn meestal 10-20s)
-                elapsed_ms = max(0, time.ticks_diff(now_ms, self.alarm_started_ms))
-                elapsed_sec = elapsed_ms // 1000
-                
-                if not self._dfplayer_playing or (elapsed_sec > 0 and elapsed_sec % 20 == 0):
+
+                restart_needed = (not self._dfplayer_playing) or (self._dfplayer_track_num != track)
+
+                # Met BUSY-pin kunnen we exact wachten tot een nummer klaar is.
+                if not restart_needed and DFPLAYER_BUSY_PIN is not None:
+                    try:
+                        if not self.dfplayer.is_busy():
+                            restart_needed = True
+                    except Exception:
+                        pass
+
+                # Zonder BUSY-pin: herstart pas na een ruime interval.
+                if not restart_needed and DFPLAYER_BUSY_PIN is None:
+                    if self._dfplayer_last_start_ms <= 0:
+                        restart_needed = True
+                    elif time.ticks_diff(now_ms, self._dfplayer_last_start_ms) >= ALARM_REPEAT_MS:
+                        restart_needed = True
+
+                if restart_needed:
                     self.dfplayer.play_mp3(track)
-                    print("DFPlayer: speel track {} (tone {}), volume {}, alarm_sec: {}".format(track, tone_num, dfvol, elapsed_sec))
+                    print("DFPlayer: speel track {} (tone {}), volume {}".format(track, tone_num, dfvol))
                     self._dfplayer_playing = True
+                    self._dfplayer_track_num = track
+                    self._dfplayer_last_start_ms = now_ms
             except Exception as e:
                 print("! DFPlayer play fout:", e)
             return

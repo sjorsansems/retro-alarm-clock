@@ -263,9 +263,8 @@ function buildAnimationOptions(toneOptions){
 }
 
 function buildScheduleAnimationOptions(toneOptions){
-  const namedOnly=(toneOptions||[])
-    .filter(t=>!toneOptionLabel(t).toUpperCase().startsWith('LIED '))
-  const builtins=namedOnly
+  const builtins=(toneOptions||[])
+    .filter(t=>Number(t.key)>=1&&Number(t.key)<=BUILTIN_TEST_TONE_MAX)
     .map(t=>`<option value="tone:${t.key}">${toneOptionLabel(t)}</option>`)
     .join('')
   const gifs=availableGifs.map(g=>`<option value="gif:${g}">${g==='random'?'random (animatie)':g+' (gif)'}</option>`).join('')
