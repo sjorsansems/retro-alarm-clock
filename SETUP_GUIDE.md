@@ -2,13 +2,33 @@
 
 ## 📌 Hardware Verbindingen
 
+### ESP32 Pinout Overzicht
+
+| ESP32 Pin | Gebruik | Component | Opmerking |
+|---|---|---|---|
+| GPIO8 | I2C SDA | OLED (SH1106) | I2C bus voor display |
+| GPIO9 | I2C SCL | OLED (SH1106) | I2C bus voor display |
+| GPIO5 | I2C SDA | DS3231 RTC | Aparte I2C bus voor RTC |
+| GPIO6 | I2C SCL | DS3231 RTC | Aparte I2C bus voor RTC |
+| GPIO13 | Knop UP (SET) | Bedieningsknop | Ingang met pull-up, knop naar GND |
+| GPIO12 | Knop DOWN (ALARM) | Bedieningsknop | Ingang met pull-up, knop naar GND |
+| GPIO14 | Knop SET | Bedieningsknop | Ingang met pull-up, knop naar GND |
+| GPIO17 | UART1 TX | DFPlayer Mini RX | Via 1k ohm serieweerstand |
+| GPIO18 | UART1 RX | DFPlayer Mini TX | Direct verbinden |
+| GPIO27 | Buzzer + | Buzzer/Speaker | Niet gebruikt in huidige versie |
+| GPIO2 | LED data | WS2812 (NeoPixel) | Bitstream, byte-order GRB |
+| 3.3V | Voeding + | OLED + DS3231 | Gebruik 3.3V, niet 5V |
+| GND | Massa | Alle modules | Gemeenschappelijke ground |
+
+Niet gebruikt in deze basissetup: alle overige GPIO's.
+
 ### OLED Display (I2C - 1.3" SH1106)
 ```
 OLED Pin    ESP32 Pin
 GND         GND
 VCC         3.3V
-SCL         GPIO22 (SCL)
-SDA         GPIO21 (SDA)
+SCL         GPIO9 (SCL)
+SDA         GPIO8 (SDA)
 ```
 
 ### DS3231 RTC Module (I2C - Real-Time Clock)
@@ -16,9 +36,22 @@ SDA         GPIO21 (SDA)
 RTC Pin     ESP32 Pin
 GND         GND
 VCC         3.3V
-SCL         GPIO22 (SCL)  [Dezelfde I2C bus als OLED]
-SDA         GPIO21 (SDA)
+SCL         GPIO6 (SCL)  [Aparte I2C bus voor RTC]
+SDA         GPIO5 (SDA)
 ```
+
+### DFPlayer Mini (MP3 Player - UART)
+```
+DFPlayer Pin   ESP32 Pin
+VCC            5V (aanbevolen) of 3.3V
+GND            GND
+RX             GPIO17 (UART1 TX) via 1kΩ weerstand
+TX             GPIO18 (UART1 RX)
+BUSY           Optioneel naar vrije GPIO (nu niet gebruikt)
+SPK_1/SPK_2    Naar speaker
+```
+
+Opmerking: in de huidige code is `busy_pin=None`, dus de BUSY-lijn hoeft niet aangesloten te zijn.
 
 ### Knoppen (Pull-Up schakelaars)
 ```
@@ -29,12 +62,13 @@ SET          GPIO14       Bevestigen / Alarm stoppen
 ```
 Verbind de andere pin van elke knop met GND.
 
-### Buzzer/Speaker (optioneel)
+### Buzzer/Speaker (optioneel, legacy)
 ```
 Buzzer Pin   ESP32 Pin
 + (Pos)      GPIO27 (via 330Ω weerstand)
 - (Neg)      GND
 ```
+In de huidige versie wordt de buzzer niet gebruikt; het alarm loopt via DFPlayer MP3.
 
 ## 🎯 Bedieningsinterface
 
@@ -115,9 +149,9 @@ De instellingen worden automatisch opgeslagen in `alarm_config.json`:
 
 ## 🔧 I2C Pull-Up Weerstanden
 
-Als het OLED/RTC niet detecteert wordt, voeg 4.7kΩ pull-up weerstanden toe:
-- Van GPIO21 (SDA) naar 3.3V
-- Van GPIO22 (SCL) naar 3.3V
+Als het OLED/RTC niet detecteert wordt, voeg 4.7kΩ pull-up weerstanden toe op de gebruikte bus(sen):
+- OLED bus: GPIO8 (SDA) naar 3.3V en GPIO9 (SCL) naar 3.3V
+- RTC bus: GPIO5 (SDA) naar 3.3V en GPIO6 (SCL) naar 3.3V
 
 ## 📝 Eerste Start
 
@@ -138,17 +172,18 @@ Als het OLED/RTC niet detecteert wordt, voeg 4.7kΩ pull-up weerstanden toe:
 ### DS3231 RTC niet detecteert
 - Controleer voeding (3.3V)
 - Zet pull-up weerstanden toe
-- DS3231 delen dezelfde I2C bus als OLED (adressen verschillen)
+- DS3231 gebruikt een aparte I2C bus (GPIO5/GPIO6)
 
 ### Knoppen reageren niet
 - Controleer GPIO pinnen in code (GPIO13, GPIO12, GPIO14)
 - Zorg dat GND verbinding goed zit
 - Controleer debounce delay (200ms) - pas aan indien nodig
 
-### Buzzer maakt geen geluid
-- Controleer GPIO27 wiring
-- Zorg voor 330Ω weerstand tussen GPIO27 en buzzer+
-- Pas `buzzer_volume` aan in code (250-1000 Hz)
+### MP3/DFPlayer speelt geen geluid
+- Controleer UART wiring: GPIO17 -> DFPlayer RX (met 1kΩ), GPIO18 <- DFPlayer TX
+- Controleer voeding van DFPlayer (liefst 5V) en gedeelde GND
+- Controleer SD-kaart en bestandsnamen (`/MP3/0001.mp3`, etc.)
+- Controleer speaker op `SPK_1`/`SPK_2`
 
 ## 🌈 LED Thema Kleurschema (per spel)
 

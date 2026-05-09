@@ -6,8 +6,8 @@ import time
 gc.collect()
 
 def _boot():
-    import retro_georgy_alarm_klok_v2
-    app = retro_georgy_alarm_klok_v2.App()
+    import retro_georgy_alarm_klok_v6
+    app = retro_georgy_alarm_klok_v6.App()
     app.run()
 
 while True:

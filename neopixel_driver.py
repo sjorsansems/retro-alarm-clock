@@ -271,6 +271,189 @@ class NeopixelDriver:
         self.set_all(r, g, b)
         self.show()
     
+    def theme_knight_rider(self, frame, intensity):
+        """Knight Rider - Red scanner bar moving left-right like KITT."""
+        # Calculate scanner position (bouncing back and forth)
+        cycle_length = (self.num_leds - 1) * 2
+        pos_in_cycle = frame % cycle_length
+        if pos_in_cycle < self.num_leds:
+            scanner_pos = pos_in_cycle
+        else:
+            scanner_pos = cycle_length - pos_in_cycle
+        
+        # Clear all, then set scanner bar
+        for i in range(self.num_leds):
+            if i == int(scanner_pos):
+                # Bright red at scanner position
+                self.set_pixel(i, 255, 0, 0)
+            elif abs(i - scanner_pos) < 1.5:
+                # Dim red around scanner (glow effect)
+                self.set_pixel(i, 100, 0, 0)
+            else:
+                # Off
+                self.set_pixel(i, 0, 0, 0)
+        self.show()
+
+    def theme_doom(self, frame, intensity):
+        """DOOM - Hellfire red/orange flicker with occasional white flash."""
+        for i in range(self.num_leds):
+            flicker = (frame * 17 + i * 31) % 100
+            if flicker > 94:
+                self.set_pixel(i, 255, 255, 255)
+            elif flicker > 70:
+                self.set_pixel(i, 255, 80 + intensity // 4, 0)
+            else:
+                self.set_pixel(i, 140 + intensity, 0, 0)
+        self.show()
+
+    def theme_fire(self, frame, intensity):
+        """Fire - Warm flame gradient that flickers from red to yellow."""
+        for i in range(self.num_leds):
+            heat = (frame * 9 + i * 19) % 120
+            if heat > 80:
+                self.set_pixel(i, 255, min(255, 180 + intensity // 3), 20)
+            elif heat > 45:
+                self.set_pixel(i, 255, 120 + intensity // 4, 0)
+            else:
+                self.set_pixel(i, 180 + intensity // 3, 20, 0)
+        self.show()
+
+    def theme_heartbeat(self, frame, intensity):
+        """Heartbeat - Double pulse rhythm in deep red."""
+        beat = frame % 30
+        if beat in (0, 1, 2, 6, 7):
+            level = 255
+        elif beat in (3, 8):
+            level = 170
+        else:
+            level = 35 + intensity // 4
+        self.set_all(level, 0, 0)
+        self.show()
+
+    def theme_matrix(self, frame, intensity):
+        """Matrix - Green digital rain style sweep."""
+        head = frame % self.num_leds
+        for i in range(self.num_leds):
+            dist = (head - i) % self.num_leds
+            if dist == 0:
+                self.set_pixel(i, 180, 255, 180)
+            elif dist == 1:
+                self.set_pixel(i, 0, 180 + intensity // 3, 0)
+            elif dist == 2:
+                self.set_pixel(i, 0, 90 + intensity // 4, 0)
+            else:
+                self.set_pixel(i, 0, 15, 0)
+        self.show()
+
+    def theme_pacman(self, frame, intensity):
+        """Pac-Man - Yellow chaser with blue ghost and white pellets."""
+        pac = (frame // 2) % self.num_leds
+        ghost = (pac + self.num_leds // 2) % self.num_leds
+        for i in range(self.num_leds):
+            if i == pac:
+                self.set_pixel(i, 255, 220, 0)
+            elif i == ghost:
+                self.set_pixel(i, 0, 140, 255)
+            elif (i + frame) % 3 == 0:
+                self.set_pixel(i, 80, 80, 80)
+            else:
+                self.set_pixel(i, 0, 0, 0)
+        self.show()
+
+    def theme_pong(self, frame, intensity):
+        """Pong - White bouncing ball with cyan/magenta paddles."""
+        span = (self.num_leds - 1) * 2
+        p = frame % span
+        ball = p if p < self.num_leds else span - p
+        left_pad = frame % 16 < 8
+        right_pad = not left_pad
+        for i in range(self.num_leds):
+            if i == int(ball):
+                self.set_pixel(i, 255, 255, 255)
+            elif i == 0 and left_pad:
+                self.set_pixel(i, 0, 220, 255)
+            elif i == self.num_leds - 1 and right_pad:
+                self.set_pixel(i, 255, 0, 255)
+            else:
+                self.set_pixel(i, 0, 0, 0)
+        self.show()
+
+    def theme_radar(self, frame, intensity):
+        """Radar - Green sweeping beam with occasional ping."""
+        sweep = frame % self.num_leds
+        ping = (frame // 10) % self.num_leds
+        for i in range(self.num_leds):
+            if i == sweep:
+                self.set_pixel(i, 80, 255, 80)
+            elif i == ping and frame % 10 < 2:
+                self.set_pixel(i, 255, 255, 255)
+            elif (i - sweep) % self.num_leds == 1:
+                self.set_pixel(i, 20, 120, 20)
+            else:
+                self.set_pixel(i, 0, 20, 0)
+        self.show()
+
+    def theme_skull(self, frame, intensity):
+        """Skull - Bone-white flashes over dark violet ambience."""
+        strobe = (frame // 4) % 6
+        if strobe == 0:
+            self.set_all(255, 255, 255)
+        else:
+            for i in range(self.num_leds):
+                vio = 20 + ((frame * 11 + i * 7) % 40)
+                self.set_pixel(i, vio, 0, 80 + intensity // 5)
+        self.show()
+
+    def theme_snake(self, frame, intensity):
+        """Snake - Green moving body with brighter head."""
+        head = frame % self.num_leds
+        for i in range(self.num_leds):
+            dist = (head - i) % self.num_leds
+            if dist == 0:
+                self.set_pixel(i, 100, 255, 60)
+            elif dist < 4:
+                self.set_pixel(i, 0, 140 - dist * 30, 0)
+            else:
+                self.set_pixel(i, 0, 10, 0)
+        self.show()
+
+    def theme_space(self, frame, intensity):
+        """Space - Deep blue with twinkling stars."""
+        for i in range(self.num_leds):
+            twinkle = (frame * 13 + i * 23) % 100
+            if twinkle > 92:
+                self.set_pixel(i, 255, 255, 255)
+            elif twinkle > 70:
+                self.set_pixel(i, 120, 160, 255)
+            else:
+                self.set_pixel(i, 0, 0, 40 + intensity // 5)
+        self.show()
+
+    def theme_ufo(self, frame, intensity):
+        """UFO - Cyan beam with magenta hull pulse."""
+        beam = (frame // 2) % self.num_leds
+        pulse = abs((frame % 20) - 10) * 8
+        for i in range(self.num_leds):
+            if i == beam:
+                self.set_pixel(i, 80, 255, 255)
+            elif i == (beam + 1) % self.num_leds:
+                self.set_pixel(i, 255, pulse, 255)
+            else:
+                self.set_pixel(i, 10, 20, 40)
+        self.show()
+
+    def theme_donkey(self, frame, intensity):
+        """Donkey - Retro amber/brown arcade barrel vibe."""
+        for i in range(self.num_leds):
+            phase = (frame + i * 3) % 24
+            if phase < 8:
+                self.set_pixel(i, 180 + intensity // 4, 80, 20)
+            elif phase < 16:
+                self.set_pixel(i, 120, 50, 10)
+            else:
+                self.set_pixel(i, 230, 150, 40)
+        self.show()
+    
     def get_theme_func(self, tone):
         """Return theme function for given tone (1-9)."""
         themes = {
@@ -283,5 +466,18 @@ class NeopixelDriver:
             '7': self.theme_tetris,
             '8': self.theme_moonstone,
             '9': self.theme_arcade,
+            '10': self.theme_doom,
+            '11': self.theme_knight_rider,
+            '12': self.theme_fire,
+            '13': self.theme_heartbeat,
+            '14': self.theme_matrix,
+            '15': self.theme_pacman,
+            '16': self.theme_pong,
+            '17': self.theme_radar,
+            '18': self.theme_skull,
+            '19': self.theme_snake,
+            '20': self.theme_space,
+            '21': self.theme_ufo,
+            '22': self.theme_donkey,
         }
         return themes.get(str(tone), self.theme_zelda)  # Default to Zelda

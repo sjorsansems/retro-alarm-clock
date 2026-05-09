@@ -12,6 +12,11 @@ import socket
 import gc
 import esp32
 
+try:
+    from urllib.parse import quote
+except ImportError:
+    quote = None
+
 # Agressieve garbage collection en PSRAM setup
 gc.enable()
 gc.collect()
@@ -87,8 +92,10 @@ WIFI_DAILY_RETRY_MS = 3600000
 WIFI_MIN_FREE_HEAP = 35000
 WIFI_CONNECT_TIMEOUT_S = 8
 DEFAULT_WIFI_SSID = "SL2_IOT"
+WIFI_HOSTNAME = "alarmklok"
 ALARM_INTRO_MS = 2500
 ALARM_BOSS_MS = 20000
+ALARM_AUTO_STOP_MS = 15 * 60 * 1000
 NIGHT_DIM_START_HOUR = 22
 NIGHT_DIM_END_HOUR = 7
 UP_BUTTON_PIN = 13    # Touch13 / ADC2_2 — vrij op S3 DevKitC-1
@@ -97,7 +104,16 @@ SET_BUTTON_PIN = 14   # Touch14 / ADC2_3 — vrij
 DAY_KEYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 
 # Aantal MP3-nummers op de SD-kaart (lied 1 t/m N)
-DFPLAYER_TRACK_COUNT = 9
+DFPLAYER_TRACK_COUNT = 30
+
+# Koppel GIF-namen aan een alarm-tone (muziek + LEDs).
+# Voeg hier nieuwe GIFs toe die je aan een specifiek liedje wilt koppelen.
+# Waarde None = geen koppeling, gebruiker kiest zelf tone.
+GIF_TONE_MAP = {
+    "mario": "2",
+    "zelda": "1",
+    "doom":  None,
+}
 
 
 def get_alarm_tone_options():
@@ -140,7 +156,7 @@ BIG_TIME_GLYPHS = {
     ":": ("0", "1", "0", "1", "0"),
 }
 
-_HTML_FILE = "index.html"
+_HTML_FILE = "index_v6.html"
 _HTML_FILE_LITE = "index_lite.html"
 
 
@@ -244,6 +260,17 @@ class WiFiManagerLite:
             if not self.sta.active():
                 self.sta.active(True)
             time.sleep(0.5)
+
+            # Zet een herkenbare netwerknaam voor DHCP/local DNS waar ondersteund.
+            try:
+                self.sta.config(dhcp_hostname=WIFI_HOSTNAME)
+                print("WiFi hostname:", WIFI_HOSTNAME)
+            except Exception:
+                try:
+                    network.hostname(WIFI_HOSTNAME)
+                    print("WiFi hostname:", WIFI_HOSTNAME)
+                except Exception:
+                    pass
 
             # Begin met een schone connect-staat.
             try:
@@ -458,11 +485,24 @@ class App:
         self.clock = ClockCore(timezone)
         self.alarm_until = None
         self.alarm_started_ms = None
+        self.snooze_until = None
+        self.snooze_tone = None
+        self.snooze_gif = ""
         self.active_tone = self.tone
+        self.active_gif = ""
+        self._skip_intro = False
+        self._in_intro = False
         self.alarm_edit_mode = False
+        self.alarm_edit_last_change_ms = 0
+        self.alarm_edit_hold_hint_until = 0
         self.alarm_edit_hour = 7
         self.alarm_edit_minute = 0
         self.alarm_edit_day_key = "mon"
+        self._set_toggle_last_key = None
+        self._set_feedback_text = ""
+        self._set_feedback_until = 0
+        self._set_feedback_lines = []
+        self._intro_audio_playing = False
         self.last_schedule_fire = None
         self.alarm_schedule = self._default_alarm_schedule()
         if self.config:
@@ -470,6 +510,25 @@ class App:
         self.alarm_combo = self._default_alarm_combo()
         if self.config:
             self.alarm_combo = self._normalize_alarm_combo(self.config.get("alarm_combo", None, self.alarm_combo))
+        self.alarm_gif_combo = self._default_alarm_gif_combo()
+        if self.config:
+            self.alarm_gif_combo = self._normalize_alarm_gif_combo(self.config.get("alarm_gif_combo", None, self.alarm_gif_combo))
+
+        # GIF → toon koppeling (instelbaar via webinterface, opgeslagen in gif_tone_map.json)
+        self._gif_tone_overrides = {}
+        try:
+            with open("gif_tone_map.json", "r") as _f:
+                self._gif_tone_overrides = json.loads(_f.read())
+        except Exception:
+            pass
+
+        # Track labels (instelbaar via webinterface, opgeslagen in track_labels.json)
+        self._track_labels = {}
+        try:
+            with open("track_labels.json", "r") as _f:
+                self._track_labels = json.loads(_f.read())
+        except Exception:
+            pass
 
         self.wifi = None
         self.wifi_ok = False
@@ -485,6 +544,7 @@ class App:
         self.next_daily_check_ms = time.ticks_add(time.ticks_ms(), WIFI_DAILY_CHECK_MS)
         self.next_daily_sync_attempt_ms = time.ticks_ms()
         self._display_dim_state = None
+        self._display_manual_mode = 0  # 0=normaal, 1=dim, 2=extra dim
         self._weather_phase = 0
         self._rtc_temp = None
         self._rtc_temp_next_ms = 0
@@ -548,6 +608,16 @@ class App:
         self.leds = None
         self._leds_failed = False
         self._led_sunrise_active = False
+        self._nightlight_on = False
+
+        # GIF-animatie state (alarm)
+        self._gif_file = None
+        self._gif_n_frames = 0
+        self._gif_frame_size = 0
+        self._gif_delays = []
+        self._gif_cur_frame = 0
+        self._gif_next_ms = 0
+        self._gif_data_offset = 0
 
         # Zorg dat de strip direct bij boot in een bekende UIT-toestand staat.
         self._ensure_leds_ready()
@@ -560,11 +630,42 @@ class App:
         self.btn_up = Pin(UP_BUTTON_PIN, Pin.IN, Pin.PULL_UP)
         self.btn_down = Pin(DOWN_BUTTON_PIN, Pin.IN, Pin.PULL_UP)
         self.btn_set = Pin(SET_BUTTON_PIN, Pin.IN, Pin.PULL_UP)
+        # start=tijdstip indrukken, fired_long=lange druk al uitgevoerd,
+        # last_edge=debounce timestamp, pending=actie klaar voor uitvoering
         self._button_state = {
-            "set": {"pressed": False, "start": 0, "long": False, "last_edge": 0},
-            "up": {"pressed": False, "start": 0, "long": False, "last_edge": 0},
-            "down": {"pressed": False, "start": 0, "long": False, "last_edge": 0},
+            "set":  {"start": 0, "fired_long": False, "last_edge": 0, "pending": None},
+            "up":   {"start": 0, "fired_long": False, "last_edge": 0, "pending": None},
+            "down": {"start": 0, "fired_long": False, "last_edge": 0, "pending": None},
         }
+
+        # Hardware IRQ op falling + rising edge:
+        # - UP heeft geen lange druk → vuurt pending="short" direct bij indrukken
+        # - SET/DOWN wachten tot loslaten om te bepalen of het kort of lang was
+        _bs = self._button_state
+        def _make_irq(name, has_long_cb):
+            s = _bs[name]
+            def handler(p):
+                now = time.ticks_ms()
+                if time.ticks_diff(now, s["last_edge"]) < 40:
+                    return
+                s["last_edge"] = now
+                if p.value() == 0:  # falling edge = ingedrukt
+                    s["start"] = now
+                    s["fired_long"] = False
+                    if not has_long_cb:
+                        s["pending"] = "short"  # direct actie op druk
+                    # SET knop tijdens intro -> alleen overslaan (geen short/long actie na intro).
+                    if name == "set" and self._in_intro:
+                        self._skip_intro = True
+                        s["pending"] = None
+                        s["fired_long"] = True
+                else:  # rising edge = losgelaten
+                    if has_long_cb and not s["fired_long"]:
+                        s["pending"] = "short"  # was een korte druk
+            return handler
+        self.btn_up.irq(trigger=Pin.IRQ_FALLING | Pin.IRQ_RISING, handler=_make_irq("up", False))
+        self.btn_down.irq(trigger=Pin.IRQ_FALLING | Pin.IRQ_RISING, handler=_make_irq("down", True))
+        self.btn_set.irq(trigger=Pin.IRQ_FALLING | Pin.IRQ_RISING, handler=_make_irq("set", True))
 
         print("WiFi: verbinden...")
         gc.collect()
@@ -759,6 +860,108 @@ class App:
             out[k] = self._normalize_tone_key(raw.get(k, out[k]))
         return out
 
+    def _default_alarm_gif_combo(self):
+        # Standaard: per dag willekeurige GIF-animatie.
+        return {k: "random" for k in DAY_KEYS}
+
+    def _normalize_alarm_gif_combo(self, raw):
+        out = self._default_alarm_gif_combo()
+        if not isinstance(raw, dict):
+            return out
+        for k in DAY_KEYS:
+            val = raw.get(k, "random")
+            if isinstance(val, str):
+                safe = "".join(c for c in val if ('a' <= c <= 'z') or ('A' <= c <= 'Z') or ('0' <= c <= '9') or c in ('-', '_'))
+                safe = safe[:32]
+                out[k] = safe if safe else "random"
+        return out
+
+    def _get_gif_tone(self, gif_name):
+        """Geeft de gekoppelde toon-key voor een GIF, overrides hebben prioriteit."""
+        if gif_name in self._gif_tone_overrides:
+            return self._gif_tone_overrides[gif_name]
+        return GIF_TONE_MAP.get(gif_name)
+
+    def _save_track_labels(self):
+        try:
+            with open("track_labels.json", "w") as _f:
+                _f.write(json.dumps(self._track_labels))
+        except Exception as _e:
+            print("! track_labels.json schrijven mislukt:", _e)
+
+    def _save_gif_tone_overrides(self):
+        try:
+            with open("gif_tone_map.json", "w") as _f:
+                _f.write(json.dumps(self._gif_tone_overrides))
+        except Exception as _e:
+            print("! gif_tone_map.json schrijven mislukt:", _e)
+
+    def _merged_gif_tone_map(self):
+        merged = {k: v for k, v in GIF_TONE_MAP.items() if v is not None}
+        merged.update({k: v for k, v in self._gif_tone_overrides.items() if v})
+        return merged
+
+    def _list_gif_names(self):
+        import os as _os
+        names = []
+        for path in ('/', '.'):
+            try:
+                names = [f[:-4] for f in _os.listdir(path) if isinstance(f, str) and f.endswith('.bin')]
+                if names:
+                    break
+            except Exception:
+                pass
+        return sorted(set(names))
+
+    def _list_gif_choices(self):
+        # 'random' altijd als expliciete optie in UI/API.
+        return ["random"] + self._list_gif_names()
+
+    def _get_storage_info(self):
+        # Geeft opslagstatus terug zodat web UI upload-limiet kan bewaken.
+        try:
+            import os as _os
+            st = _os.statvfs('/')
+            block_size = int(st[0])
+            total_bytes = block_size * int(st[2])
+            free_bytes = block_size * int(st[3])
+            used_bytes = max(0, total_bytes - free_bytes)
+            reserve_bytes = 128 * 1024  # buffer om crashes door volle flash te voorkomen
+            upload_max_bytes = max(0, free_bytes - reserve_bytes)
+            percent_used = int((used_bytes * 100) // total_bytes) if total_bytes > 0 else 0
+            return {
+                "total_bytes": total_bytes,
+                "used_bytes": used_bytes,
+                "free_bytes": free_bytes,
+                "reserve_bytes": reserve_bytes,
+                "upload_max_bytes": upload_max_bytes,
+                "percent_used": percent_used,
+            }
+        except Exception:
+            return {
+                "total_bytes": 0,
+                "used_bytes": 0,
+                "free_bytes": 0,
+                "reserve_bytes": 0,
+                "upload_max_bytes": 0,
+                "percent_used": 0,
+            }
+
+    def _pick_alarm_gif(self, gif_setting):
+        if not isinstance(gif_setting, str):
+            return ""
+        if gif_setting == "random":
+            names = self._list_gif_names()
+            if not names:
+                return ""
+            # Lichtgewicht pseudo-random keuze zonder extra modules.
+            t = self.clock.read_time()
+            seed = (int(t[0]) * 1000000) + (int(t[1]) * 10000) + (int(t[2]) * 100) + int(t[5])
+            seed ^= int(time.ticks_ms())
+            idx = seed % len(names)
+            return names[idx]
+        return gif_setting
+
     def _normalize_alarm_schedule(self, raw):
         out = self._default_alarm_schedule()
         if not isinstance(raw, dict):
@@ -784,13 +987,22 @@ class App:
         if self.last_schedule_fire == fire_key:
             return
         self.last_schedule_fire = fire_key
+        self.snooze_until = None
+        self.snooze_tone = None
+        self.snooze_gif = ""
         self.active_tone = self._normalize_tone_key(self.alarm_combo.get(day_key, self._tone_now()))
+        self.active_gif = self._pick_alarm_gif(self.alarm_gif_combo.get(day_key, "random"))
+        # Overschrijf tone als de gekozen GIF een vaste koppeling heeft
+        if self.active_gif and self._get_gif_tone(self.active_gif) is not None:
+            self.active_tone = self._normalize_tone_key(self._get_gif_tone(self.active_gif))
+            print("GIF-tone koppeling: {} -> tone {}".format(self.active_gif, self.active_tone))
         self.alarm_started_ms = time.ticks_ms()
-        self.alarm_until = time.ticks_add(time.ticks_ms(), 60 * 1000)
+        self.alarm_until = time.ticks_add(time.ticks_ms(), ALARM_AUTO_STOP_MS)
 
     def _stop_alarm(self):
         self.alarm_until = None
         self.alarm_started_ms = None
+        self._nightlight_on = False  # alarm overschrijft nachtlampje
         if self.dfplayer is not None:
             try:
                 self.dfplayer.stop()
@@ -798,12 +1010,40 @@ class App:
             except Exception:
                 pass
         self._dfplayer_playing = False
+        self._intro_audio_playing = False
         if self.leds is not None:
             try:
                 self.leds.clear()
             except Exception:
                 pass
         self._led_sunrise_active = False
+        self.active_gif = ""
+        # Sluit eventueel open GIF-bestand
+        if self._gif_file is not None:
+            try:
+                self._gif_file.close()
+            except Exception:
+                pass
+            self._gif_file = None
+            self._gif_delays = []
+
+    def _snooze_alarm(self, minutes=10):
+        if self.alarm_until is None:
+            return
+        self.snooze_tone = self.active_tone
+        self.snooze_gif = self.active_gif
+        self._stop_alarm()
+        self.snooze_until = time.ticks_add(time.ticks_ms(), int(minutes) * 60 * 1000)
+        self._set_feedback("SNOOZE 10 MIN", ms=2000)
+        print("Alarm snooze {} min".format(int(minutes)))
+
+    def _snooze_remaining_seconds(self):
+        if self.snooze_until is None:
+            return 0
+        rem_ms = time.ticks_diff(self.snooze_until, time.ticks_ms())
+        if rem_ms <= 0:
+            return 0
+        return (rem_ms + 999) // 1000
 
     def _current_day_alarm(self):
         t = self.clock.read_time()
@@ -811,6 +1051,129 @@ class App:
         day_key = DAY_KEYS[day_idx]
         row = self.alarm_schedule.get(day_key, {"enabled": False, "hour": 7, "minute": 0})
         return day_key, row
+
+    def _set_feedback(self, text, ms=2200):
+        self._set_feedback_text = str(text or "")
+        self._set_feedback_until = time.ticks_add(time.ticks_ms(), int(ms))
+
+    def _next_alarm_entry(self, include_disabled=False):
+        t = self.clock.read_time()
+        day_abbr = ("ma", "di", "wo", "do", "vr", "za", "zo")
+        day_keys = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+        cfg = self.alarm_schedule
+        if not isinstance(cfg, dict):
+            return None
+        today_idx = (int(t[6]) - 1) % 7
+        cur_h = int(t[3])
+        cur_m = int(t[4])
+        for offset in range(7):
+            di = (today_idx + offset) % 7
+            key = day_keys[di]
+            alarm = cfg.get(key)
+            if alarm is None:
+                continue
+            enabled = bool(alarm.get("enabled", False))
+            if (not include_disabled) and (not enabled):
+                continue
+            try:
+                hh = int(alarm.get("hour", 0))
+                mm = int(alarm.get("minute", 0))
+            except Exception:
+                continue
+            if offset == 0 and (hh < cur_h or (hh == cur_h and mm <= cur_m)):
+                continue
+            return {
+                "key": key,
+                "day": day_abbr[di],
+                "hour": hh,
+                "minute": mm,
+                "enabled": enabled,
+            }
+        return None
+
+    def _set_toggle_next_alarm(self):
+        day_map = {
+            "mon": "maandag", "tue": "dinsdag", "wed": "woensdag",
+            "thu": "donderdag", "fri": "vrijdag", "sat": "zaterdag", "sun": "zondag"
+        }
+        # Tweede druk na UIT: zet exact die eerder uitgezette alarmdag weer AAN.
+        if self._set_toggle_last_key:
+            row = self.alarm_schedule.get(self._set_toggle_last_key)
+            if isinstance(row, dict) and (not bool(row.get("enabled", False))):
+                hh = int(row.get("hour", 7)) % 24
+                mm = int(row.get("minute", 0)) % 60
+                self.alarm_schedule[self._set_toggle_last_key] = {
+                    "enabled": True, "hour": hh, "minute": mm,
+                }
+                if self.config:
+                    self.config.config["alarm_schedule"] = self.alarm_schedule
+                    self.config.save()
+                if self.eeprom is not None:
+                    try:
+                        self.eeprom.save_alarm_schedule(self.alarm_schedule)
+                    except Exception:
+                        pass
+                day_txt = day_map.get(self._set_toggle_last_key, self._set_toggle_last_key)
+                nxt_after = self._next_alarm_entry(include_disabled=False)
+                lines = [
+                    "Alarm aan op:",
+                    "{} {:02d}:{:02d}".format(day_txt, hh, mm),
+                    "---",
+                ]
+                if nxt_after:
+                    nxt_day = day_map.get(nxt_after["key"], nxt_after["day"])
+                    lines += [
+                        "Eerst volgend:",
+                        "{} {:02d}:{:02d}".format(nxt_day, nxt_after["hour"], nxt_after["minute"]),
+                    ]
+                else:
+                    lines += ["Geen volgend", "alarm actief"]
+                self._set_feedback_lines = lines
+                self._set_feedback("", ms=3500)
+                print("Alarm AAN {} {:02d}:{:02d}".format(day_txt, hh, mm))
+                self._set_toggle_last_key = None
+                return
+
+        # Eerste druk: zet eerstvolgende actieve alarm UIT.
+        nxt = self._next_alarm_entry(include_disabled=False)
+        if not nxt:
+            self._set_feedback_lines = ["Geen actief", "alarm gevonden"]
+            self._set_feedback("", ms=2500)
+            print("Geen actief alarm om UIT te zetten")
+            return
+
+        key = nxt["key"]
+        row = self.alarm_schedule.get(key, {})
+        hh = int(row.get("hour", nxt["hour"])) % 24
+        mm = int(row.get("minute", nxt["minute"])) % 60
+        self.alarm_schedule[key] = {"enabled": False, "hour": hh, "minute": mm}
+        if self.config:
+            self.config.config["alarm_schedule"] = self.alarm_schedule
+            self.config.save()
+        if self.eeprom is not None:
+            try:
+                self.eeprom.save_alarm_schedule(self.alarm_schedule)
+            except Exception:
+                pass
+        self._set_toggle_last_key = key
+        day_txt = day_map.get(key, nxt["day"])
+        nxt_after = self._next_alarm_entry(include_disabled=False)
+        lines = [
+            "Alarm uit op:",
+            "{} {:02d}:{:02d}".format(day_txt, hh, mm),
+            "---",
+        ]
+        if nxt_after:
+            nxt_day = day_map.get(nxt_after["key"], nxt_after["day"])
+            lines += [
+                "Eerst volgend:",
+                "{} {:02d}:{:02d}".format(nxt_day, nxt_after["hour"], nxt_after["minute"]),
+            ]
+        else:
+            lines += ["Geen volgend", "alarm actief"]
+        self._set_feedback_lines = lines
+        self._set_feedback("", ms=3500)
+        print("Alarm UIT {} {:02d}:{:02d}".format(day_txt, hh, mm))
 
     def _toggle_today_alarm(self):
         day_key, row = self._current_day_alarm()
@@ -833,10 +1196,17 @@ class App:
     def _enter_alarm_edit_mode(self):
         day_key, row = self._current_day_alarm()
         self.alarm_edit_mode = True
+        self.alarm_edit_last_change_ms = 0
+        self.alarm_edit_hold_hint_until = 0
         self.alarm_edit_day_key = day_key
         self.alarm_edit_hour = int(row.get("hour", 7)) % 24
         self.alarm_edit_minute = int(row.get("minute", 0)) % 60
         print("Alarm instellen {} {:02d}:{:02d}".format(day_key, self.alarm_edit_hour, self.alarm_edit_minute))
+        self._ensure_leds_ready()
+        if self.leds:
+            for i in range(self.leds.num_leds):
+                self.leds.set_pixel(i, 60, 0, 0)  # dim rood
+            self.leds.show()
 
     def _save_alarm_edit_mode(self):
         self.alarm_schedule[self.alarm_edit_day_key] = {
@@ -845,6 +1215,7 @@ class App:
             "minute": int(self.alarm_edit_minute) % 60,
         }
         self.alarm_edit_mode = False
+        self.alarm_edit_hold_hint_until = 0
         if self.config:
             self.config.config["alarm_schedule"] = self.alarm_schedule
             self.config.save()
@@ -854,14 +1225,58 @@ class App:
             except Exception:
                 pass
         print("Alarm opgeslagen {} {:02d}:{:02d}".format(self.alarm_edit_day_key, self.alarm_edit_hour, self.alarm_edit_minute))
+        self._play_alarm_saved_animation()
+        self._start_clock_transition(use_leds=True)
+
+    def _play_alarm_saved_animation(self):
+        if not self.display:
+            return
+        # Korte, goedkope 8-bit save animatie met rode LED knipper.
+        seed = (time.ticks_ms() ^ (self.alarm_edit_hour << 8) ^ self.alarm_edit_minute) & 0x7FFFFFFF
+        for fi in range(22):
+            self.display.fill(0)
+            if fi % 4 < 2:
+                self.display.rect(0, 0, 128, 64, 1)
+            # 8-bit sterretjes (lichte random sparkle)
+            for _i in range(10):
+                seed = (1103515245 * seed + 12345) & 0x7FFFFFFF
+                x = (seed >> 8) % 128
+                seed = (1103515245 * seed + 12345) & 0x7FFFFFFF
+                y = (seed >> 16) % 64
+                self.display.pixel(x, y, 1)
+            if fi >= 4:
+                self.display.text("TIJD", 40, 20, 1)
+            if fi >= 8:
+                self.display.text("OPGESLAGEN", 24, 34, 1)
+            if fi >= 12 and (fi % 2 == 0):
+                self.display.text("OK", 56, 50, 1)
+            self.display.show()
+
+            if self.leds:
+                if fi % 2 == 0:
+                    for j in range(self.leds.num_leds):
+                        self.leds.set_pixel(j, 80, 0, 0)
+                    self.leds.show()
+                else:
+                    self.leds.clear()
+            time.sleep_ms(70)
+
+        if self.leds:
+            if self._nightlight_on:
+                for i in range(self.leds.num_leds):
+                    self.leds.set_pixel(i, 255, 120, 40)
+                self.leds.show()
+            else:
+                self.leds.clear()
 
     def _set_short_press(self):
         if self.alarm_until is not None:
             self._stop_alarm()
             return
         if self.alarm_edit_mode:
+            self.alarm_edit_hold_hint_until = time.ticks_add(time.ticks_ms(), 3000)
             return
-        self._toggle_today_alarm()
+        self._set_toggle_next_alarm()
 
     def _set_long_press(self):
         if self.alarm_until is not None:
@@ -873,14 +1288,36 @@ class App:
         self._enter_alarm_edit_mode()
 
     def _up_short_press(self):
-        if not self.alarm_edit_mode:
+        if self.alarm_edit_mode:
+            self.alarm_edit_hour = (self.alarm_edit_hour + 1) % 24
+            self.alarm_edit_last_change_ms = time.ticks_ms()
             return
-        self.alarm_edit_hour = (self.alarm_edit_hour + 1) % 24
+        # Normaal scherm: nachtlampje aan/uit
+        self._nightlight_on = not self._nightlight_on
+        self._ensure_leds_ready()
+        if self.leds:
+            if self._nightlight_on:
+                # Warm wit, laag vermogen (~30% brightness)
+                for i in range(self.leds.num_leds):
+                    self.leds.set_pixel(i, 255, 120, 40)
+                self.leds.show()
+                print("Nachtlampje AAN")
+            else:
+                self.leds.clear()
+                print("Nachtlampje UIT")
 
     def _down_short_press(self):
+        if self.alarm_until is not None:
+            self._snooze_alarm(10)
+            return
         if not self.alarm_edit_mode:
+            self._display_manual_mode = (self._display_manual_mode + 1) % 3
+            labels = ("OLED: NORMAAL", "OLED: DIM", "OLED: RAND")
+            self._set_feedback(labels[self._display_manual_mode], ms=1200)
+            self._apply_display_brightness(force=True)
             return
         self.alarm_edit_minute = (self.alarm_edit_minute + 1) % 60
+        self.alarm_edit_last_change_ms = time.ticks_ms()
 
     def _down_long_press(self):
         if self.alarm_until is not None:
@@ -904,50 +1341,42 @@ class App:
             self.wifi_auto_off_ms = None
             print("WiFi UIT")
 
-    def _process_button(self, name, pin, short_cb=None, long_cb=None, long_press_ms=2000):
-        state = self._button_state[name]
-        now = time.ticks_ms()
-        pressed = (pin.value() == 0)
-
-        if pressed and not state["pressed"]:
-            if time.ticks_diff(now, state["last_edge"]) < 120:
-                return
-            # One press should always silence the active alarm immediately.
-            if self.alarm_until is not None:
-                self._stop_alarm()
-                state["pressed"] = True
-                state["start"] = now
-                state["long"] = True  # suppress short callback on release
-                state["last_edge"] = now
-                return
-            state["pressed"] = True
-            state["start"] = now
-            state["long"] = False
-            state["last_edge"] = now
-            return
-
-        if pressed and state["pressed"]:
-            if long_cb and (not state["long"]) and time.ticks_diff(now, state["start"]) >= long_press_ms:
-                long_cb()
-                state["long"] = True
-            return
-
-        if (not pressed) and state["pressed"]:
-            if time.ticks_diff(now, state["last_edge"]) < 50:
-                state["pressed"] = False
-                state["long"] = False
-                state["last_edge"] = now
-                return
-            if (not state["long"]) and short_cb:
-                short_cb()
-            state["pressed"] = False
-            state["long"] = False
-            state["last_edge"] = now
-
     def _handle_buttons(self):
-        self._process_button("set", self.btn_set, short_cb=self._set_short_press, long_cb=self._set_long_press)
-        self._process_button("up", self.btn_up, short_cb=self._up_short_press)
-        self._process_button("down", self.btn_down, short_cb=self._down_short_press, long_cb=self._down_long_press, long_press_ms=3000)
+        now = time.ticks_ms()
+        buttons = [
+            ("set",  self._set_short_press,  self._set_long_press,  self.btn_set,  3000),
+            ("up",   self._up_short_press,    None,                  self.btn_up,   0),
+            ("down", self._down_short_press,  self._down_long_press, self.btn_down, 3000),
+        ]
+        for name, short_cb, long_cb, pin_obj, long_ms in buttons:
+            s = self._button_state[name]
+
+            # Alarm actief: SET stopt, DOWN snooze 10 min, UP doet niets.
+            if s["pending"] is not None and self.alarm_until is not None:
+                s["pending"] = None
+                s["fired_long"] = True
+                if name == "set":
+                    self._stop_alarm()
+                elif name == "down":
+                    self._snooze_alarm(10)
+                continue
+
+            # Voer pending actie direct uit (gezet door IRQ)
+            if s["pending"] == "short":
+                s["pending"] = None
+                if short_cb:
+                    short_cb()
+            elif s["pending"] == "long":
+                s["pending"] = None
+                if long_cb:
+                    long_cb()
+
+            # Lange druk detectie terwijl knop ingehouden (alleen voor knoppen met long_cb)
+            if long_cb and not s["fired_long"] and pin_obj.value() == 0:
+                if s["start"] > 0 and time.ticks_diff(now, s["start"]) >= long_ms:
+                    s["fired_long"] = True
+                    s["pending"] = None  # annuleer eventuele short
+                    long_cb()
 
     def _normalize_tone_key(self, tone):
         try:
@@ -996,26 +1425,24 @@ class App:
         if not df_ready and DFPlayer is not None and not self._dfplayer_failed:
             print("! DFPlayer niet klaar voor alarmstart")
 
-        # --- DFPlayer: eenmalig starten met geselecteerd lied ---
+        # --- DFPlayer: herhaal het geselecteerde lied totdat alarm eindigt ---
         if self.dfplayer is not None:
-            if not self._dfplayer_playing:
-                try:
-                    track = int(self.active_tone)
-                    dfvol = max(0, min(30, int(self.volume * 30 // 100) + self._alarm_boss_level() * 3))
-                    self.dfplayer.set_volume(dfvol)
-                    # Speel exact bestand /MP3/000N.mp3 om SD-volgordeproblemen te vermijden.
+            try:
+                track = int(self.active_tone)
+                dfvol = max(0, min(30, int(self.volume * 30 // 100) + self._alarm_boss_level() * 3))
+                self.dfplayer.set_volume(dfvol)
+                
+                # Speel altijd: dit zorgt ervoor dat als het nummer is afgelopen, het opnieuw start
+                if not self._dfplayer_playing:
                     self.dfplayer.play_mp3(track)
-                    print("DFPlayer: speel MP3 track {} op volume {}".format(track, dfvol))
+                    print("DFPlayer: speel track {} op volume {}".format(track, dfvol))
                     self._dfplayer_playing = True
-                except Exception as e:
-                    print("! DFPlayer play fout:", e)
-            else:
-                # Boss mode: volume traploos opvoeren terwijl alarm blijft lopen.
-                try:
-                    dfvol = max(0, min(30, int(self.volume * 30 // 100) + self._alarm_boss_level() * 3))
-                    self.dfplayer.set_volume(dfvol)
-                except Exception as e:
-                    print("! DFPlayer volume fout:", e)
+                else:
+                    # Muziek loopt. Check elke seconde of we opnieuw moeten starten
+                    # (DFPlayer geeft geen status terug, dus we spelen gewoon opnieuw)
+                    pass
+            except Exception as e:
+                print("! DFPlayer play fout:", e)
             return
 
         # Geen DFPlayer beschikbaar: stil (buzzer uitgeschakeld)
@@ -1053,9 +1480,18 @@ class App:
             return {}
 
     def _request(self, c):
+        # Zorg dat de client-socket blokkerende mode heeft met timeout
+        # zodat recv() niet direct EAGAIN gooit op non-blocking sockets.
+        try:
+            c.settimeout(3)
+        except Exception:
+            pass
         data = b""
         while b"\r\n\r\n" not in data and len(data) < 4096:
-            ch = c.recv(512)
+            try:
+                ch = c.recv(512)
+            except OSError:
+                break
             if not ch:
                 break
             data += ch
@@ -1069,7 +1505,10 @@ class App:
                     except:
                         cl = 0
             while len(b) < cl and len(data) < 8192:
-                ch = c.recv(min(512, cl - len(b)))
+                try:
+                    ch = c.recv(min(512, cl - len(b)))
+                except OSError:
+                    break
                 if not ch:
                     break
                 data += ch
@@ -1189,6 +1628,8 @@ class App:
         """
         if self.display is None:
             return
+        self._in_intro = True
+        self._skip_intro = False  # reset voor elke boot
 
         # ── Helper: teken tekst 2× geschaald (via tijdelijk framebuf) ────────
         def draw_2x(text, x, y, col=1):
@@ -1286,8 +1727,9 @@ class App:
         try:
             if self._ensure_dfplayer_ready() and self.dfplayer is not None:
                 self.dfplayer.set_volume(20)
-                self.dfplayer.play_mp3(999)
-                print("♫ Intro: 999.mp3 afspelen")
+                self.dfplayer.play_mp3(1)
+                self._intro_audio_playing = True
+                print("♫ Intro: 0001.mp3 afspelen")
         except Exception as _e:
             print("! Intro DFPlayer:", _e)
 
@@ -1305,6 +1747,7 @@ class App:
 
         # ── FASE 1: pixel-ruis + LED flikkeren (5 frames) ───────────────────
         for f in range(5):
+            if self._skip_intro: break
             self.display.fill(0)
             seed = time.ticks_ms()
             for i in range(25):
@@ -1315,6 +1758,7 @@ class App:
 
         # ── FASE 2: "RETRO" schuift neer van boven (8 frames) ───────────────
         for fi, ry in enumerate(RETRO_YS):
+            if self._skip_intro: break
             self.display.fill(0)
             if ry > -16:
                 draw_2x("RETRO", RETRO_X, ry, 1)
@@ -1328,6 +1772,7 @@ class App:
 
         # ── FASE 3: RETRO IMPACT (3 frames) ─────────────────────────────────
         for fi in range(3):
+            if self._skip_intro: break
             self.display.fill(0)
             draw_2x("RETRO", RETRO_X, RETRO_Y_END, 1)
             impact_y = RETRO_Y_END + 17
@@ -1346,6 +1791,7 @@ class App:
 
         # ── FASE 4: "GEORGY" schuift op van onder (8 frames) ────────────────
         for fi, gy in enumerate(GEORGY_YS):
+            if self._skip_intro: break
             self.display.fill(0)
             draw_2x("RETRO", RETRO_X, RETRO_Y_END, 1)
             if gy < 64:
@@ -1360,6 +1806,7 @@ class App:
 
         # ── FASE 5: GEORGY IMPACT (3 frames) ────────────────────────────────
         for fi in range(3):
+            if self._skip_intro: break
             self.display.fill(0)
             draw_2x("RETRO",  RETRO_X,  RETRO_Y_END,  1)
             draw_2x("GEORGY", GEORGY_X, GEORGY_Y_END, 1)
@@ -1379,6 +1826,7 @@ class App:
         ALARMKLOK = "ALARM KLOK"
         ALARMKLOK_X = (128 - len(ALARMKLOK) * 8) // 2  # 4
         for fi in range(14):
+            if self._skip_intro: break
             self.display.fill(0)
             draw_2x("RETRO",  RETRO_X,  RETRO_Y_END,  1)
             draw_2x("GEORGY", GEORGY_X, GEORGY_Y_END, 1)
@@ -1395,19 +1843,195 @@ class App:
             leds_rainbow(fi * 2)
             time.sleep_ms(70)
 
-        # ── FASE 7: eindscherm vasthouden (20 frames = 1 sec) ───────────────
-        for fi in range(20):
+        # ── FASE 7: WiFi zoekt verbinding (animatie, 8-bit stijl) ───────────
+        # 8-bit WiFi-icoon: 3 concentrische bogen + stip (16×10 px)
+        def draw_wifi_icon(x, y, rings=3, invert=False):
+            """Teken WiFi-icoon met 'rings' actieve bogen (0-3)."""
+            d = self.display
+            col = 0 if invert else 1
+            # Stip (antenne-punt)
+            d.fill_rect(x + 7, y + 9, 2, 2, col)
+            # Boog 1 (klein)
+            if rings >= 1:
+                d.pixel(x + 5, y + 7, col); d.pixel(x + 6, y + 6, col)
+                d.pixel(x + 9, y + 6, col); d.pixel(x + 10, y + 7, col)
+            # Boog 2 (middel)
+            if rings >= 2:
+                d.pixel(x + 3, y + 6, col); d.pixel(x + 4, y + 5, col)
+                d.pixel(x + 5, y + 4, col); d.pixel(x + 6, y + 3, col)
+                d.pixel(x + 9, y + 3, col); d.pixel(x + 10, y + 4, col)
+                d.pixel(x + 11, y + 5, col); d.pixel(x + 12, y + 6, col)
+            # Boog 3 (groot)
+            if rings >= 3:
+                d.pixel(x + 1, y + 6, col); d.pixel(x + 2, y + 4, col)
+                d.pixel(x + 3, y + 2, col); d.pixel(x + 4, y + 1, col)
+                d.pixel(x + 6, y,     col); d.pixel(x + 9, y,     col)
+                d.pixel(x + 11, y + 1, col); d.pixel(x + 12, y + 2, col)
+                d.pixel(x + 13, y + 4, col); d.pixel(x + 14, y + 6, col)
+
+        WIFI_X = (128 - 16) // 2   # gecentreerd
+        WIFI_Y = 28
+        SCAN_TEXT = "SCANNING..."
+        SCAN_X = (128 - len(SCAN_TEXT) * 8) // 2
+
+        for fi in range(24):
+            if self._skip_intro: break
             self.display.fill(0)
-            draw_2x("RETRO",  RETRO_X,  RETRO_Y_END,  1)
-            draw_2x("GEORGY", GEORGY_X, GEORGY_Y_END, 1)
-            self.display.rect(0, 0, 128, 64, 1)
-            self.display.rect(2, 2, 124, 60, 1)
-            self.display.text(ALARMKLOK, ALARMKLOK_X, 50, 1)
+            # Titel bovenaan (klein)
+            self.display.text("RETRO GEORGY", 8, 2, 1)
+            self.display.hline(0, 11, 128, 1)
+            # Pulserende bogen: cyclus 0→1→2→3→2→1→0...
+            pulse = fi % 8
+            rings = pulse if pulse <= 3 else (6 - pulse)
+            draw_wifi_icon(WIFI_X, WIFI_Y, rings)
+            # Knipperende scan-tekst
+            if fi % 4 < 3:
+                self.display.text(SCAN_TEXT, SCAN_X, 52, 1)
+            # Voortgangspuntjes onder het icoon
+            dots = fi % 4
+            for d2 in range(dots + 1):
+                self.display.fill_rect(52 + d2 * 8, 42, 4, 4, 1)
             self.display.show()
-            leds_rainbow(28 + fi * 3)
-            time.sleep_ms(50)
+            leds_sweep_l2r(fi % 8, 0, 180, 255)
+            time.sleep_ms(80)
+
+        # ── FASE 8: BAM! IP-adres gevonden ──────────────────────────────────
+        ip = self.wifi.get_ip() if (self.wifi_ok and self.wifi) else None
+
+        if self._skip_intro:
+            self.startup_ip_until = None
+            leds_clear()
+            try:
+                if self.dfplayer:
+                    self.dfplayer.stop()
+            except Exception:
+                pass
+            self._intro_audio_playing = False
+            self._in_intro = False
+            return
+
+        def _safe_ascii_text(value, max_chars=16):
+            try:
+                s = str(value if value is not None else "")
+            except Exception:
+                s = ""
+            out = []
+            for ch in s:
+                code = ord(ch)
+                if 32 <= code <= 126:
+                    out.append(ch)
+                else:
+                    out.append("?")
+            if not out:
+                out = ["-"]
+            txt = "".join(out)
+            if len(txt) > max_chars:
+                return txt[:max_chars]
+            return txt
+
+        try:
+            # BAM flash: 3 frames wit knippert
+            for fi in range(3):
+                if self._skip_intro:
+                    break
+                self.display.fill(fi % 2)
+                if fi % 2 == 0:
+                    self.display.text("  ** BAM! **  ", 0, 26, 1)
+                self.display.show()
+                leds_set(255, 255, 0)
+                time.sleep_ms(80)
+
+            # Lange WiFi reveal (zelfde gevoel/duur), maar geheugen-zuinig getekend.
+            GEVONDEN = "GEVONDEN!"
+            SSID_LABEL = "VERBONDEN MET"
+            IP_LABEL = "IP ADRES"
+            ssid_str = _safe_ascii_text(self.wifi_ssid or "onbekend", max_chars=16)
+            ip_str = _safe_ascii_text(ip if ip else "geen WiFi", max_chars=16)
+
+            def _draw_typed(text, shown, x, y):
+                count = shown if shown < len(text) else len(text)
+                i = 0
+                while i < count:
+                    self.display.text(text[i], x + i * 8, y, 1)
+                    i += 1
+
+            total_frames = len(GEVONDEN) + len(SSID_LABEL) + len(ssid_str) + len(IP_LABEL) + len(ip_str) + 20
+            for fi in range(total_frames):
+                if self._skip_intro:
+                    break
+
+                self.display.fill(0)
+                self.display.text("RETRO GEORGY", 8, 2, 1)
+                self.display.hline(0, 11, 128, 1)
+                draw_wifi_icon(2, 18, 3)
+
+                g_shown = fi + 1
+                _draw_typed(GEVONDEN, g_shown, 24, 18)
+                if fi < len(GEVONDEN) and (fi % 2 == 0):
+                    cursor_x = 24 + (g_shown if g_shown < len(GEVONDEN) else len(GEVONDEN)) * 8
+                    self.display.text("_", cursor_x, 18, 1)
+
+                ssid_label_fi = fi - len(GEVONDEN) - 1
+                if ssid_label_fi >= 0:
+                    _draw_typed(SSID_LABEL, ssid_label_fi + 1, 0, 30)
+
+                ssid_text_fi = fi - len(GEVONDEN) - len(SSID_LABEL) - 2
+                if ssid_text_fi >= 0:
+                    _draw_typed(ssid_str, ssid_text_fi + 1, 0, 38)
+                    if ssid_text_fi < len(ssid_str) and (ssid_text_fi % 2 == 0):
+                        cursor_x = (ssid_text_fi + 1 if (ssid_text_fi + 1) < len(ssid_str) else len(ssid_str)) * 8
+                        self.display.text("_", cursor_x, 38, 1)
+
+                ip_label_fi = fi - len(GEVONDEN) - len(SSID_LABEL) - len(ssid_str) - 3
+                if ip_label_fi >= 0:
+                    _draw_typed(IP_LABEL, ip_label_fi + 1, 0, 48)
+
+                ip_text_fi = fi - len(GEVONDEN) - len(SSID_LABEL) - len(ssid_str) - len(IP_LABEL) - 4
+                if ip_text_fi >= 0:
+                    _draw_typed(ip_str, ip_text_fi + 1, 0, 56)
+                    if ip_text_fi < len(ip_str) and (ip_text_fi % 2 == 0):
+                        cursor_x = (ip_text_fi + 1 if (ip_text_fi + 1) < len(ip_str) else len(ip_str)) * 8
+                        self.display.text("_", cursor_x, 56, 1)
+
+                if fi >= (total_frames - 16):
+                    if (fi % 4) < 2:
+                        self.display.rect(0, 12, 128, 52, 1)
+
+                self.display.show()
+                leds_rainbow(40 + fi * 4)
+                if (fi % 10) == 0:
+                    gc.collect()
+                time.sleep_ms(70)
+
+            # Vasthouden (zelfde duur als eerder, ca. 1.5s)
+            for fi in range(18):
+                if self._skip_intro:
+                    break
+                self.display.fill(0)
+                self.display.text("RETRO GEORGY", 8, 2, 1)
+                self.display.hline(0, 11, 128, 1)
+                draw_wifi_icon(2, 18, 3)
+                self.display.text(GEVONDEN, 24, 18, 1)
+                self.display.text(SSID_LABEL, 0, 30, 1)
+                self.display.text(ssid_str, 0, 38, 1)
+                self.display.text(IP_LABEL, 0, 48, 1)
+                self.display.text(ip_str, 0, 56, 1)
+                self.display.rect(0, 12, 128, 52, 1)
+                self.display.show()
+                leds_rainbow(110 + fi * 3)
+                if (fi % 6) == 0:
+                    gc.collect()
+                time.sleep_ms(80)
+        except Exception as _e:
+            # Intro mag de hoofdloop nooit blokkeren.
+            print("! Intro WiFi reveal fout:", _e)
+
+        # Zet startup_ip_until op None: IP al getoond in intro
+        self.startup_ip_until = None
 
         leds_clear()
+        self._intro_audio_playing = False
+        self._in_intro = False
         gc.collect()
         print("Boot intro klaar")
 
@@ -1419,23 +2043,36 @@ class App:
         self.display.text(ip if ip else "geen netwerk", 8, 40, 1)
         self.display.show()
 
+    def _draw_wifi_intro_style_icon(self, x, y, rings=3):
+        # Zelfde 8-bit stijl als in de boot-intro (16x10).
+        d = self.display
+        # Stip (antenne-punt)
+        d.fill_rect(x + 7, y + 9, 2, 2, 1)
+        # Boog 1 (klein)
+        if rings >= 1:
+            d.pixel(x + 5, y + 7, 1); d.pixel(x + 6, y + 6, 1)
+            d.pixel(x + 9, y + 6, 1); d.pixel(x + 10, y + 7, 1)
+        # Boog 2 (middel)
+        if rings >= 2:
+            d.pixel(x + 3, y + 6, 1); d.pixel(x + 4, y + 5, 1)
+            d.pixel(x + 5, y + 4, 1); d.pixel(x + 6, y + 3, 1)
+            d.pixel(x + 9, y + 3, 1); d.pixel(x + 10, y + 4, 1)
+            d.pixel(x + 11, y + 5, 1); d.pixel(x + 12, y + 6, 1)
+        # Boog 3 (groot)
+        if rings >= 3:
+            d.pixel(x + 1, y + 6, 1); d.pixel(x + 2, y + 4, 1)
+            d.pixel(x + 3, y + 2, 1); d.pixel(x + 4, y + 1, 1)
+            d.pixel(x + 6, y, 1); d.pixel(x + 9, y, 1)
+            d.pixel(x + 11, y + 1, 1); d.pixel(x + 12, y + 2, 1)
+            d.pixel(x + 13, y + 4, 1); d.pixel(x + 14, y + 6, 1)
+
     def _draw_wifi_status_icon(self, x, y):
-        # Tiny 8x8 WiFi icon (bottom-right status indicator)
-        self.display.pixel(x + 3, y + 7, 1)
-        self.display.pixel(x + 3, y + 6, 1)
-        self.display.line(x + 2, y + 5, x + 4, y + 5, 1)
-        self.display.line(x + 1, y + 4, x + 5, y + 4, 1)
-        self.display.line(x, y + 3, x + 6, y + 3, 1)
+        self._draw_wifi_intro_style_icon(x, y, 3)
 
     def _draw_wifi_off_icon(self, x, y):
-        # Tiny 8x8 WiFi-off icon: arcs + diagonale streep
-        self.display.pixel(x + 3, y + 7, 1)
-        self.display.pixel(x + 3, y + 6, 1)
-        self.display.line(x + 2, y + 5, x + 4, y + 5, 1)
-        self.display.line(x + 1, y + 4, x + 5, y + 4, 1)
-        self.display.line(x, y + 3, x + 6, y + 3, 1)
+        self._draw_wifi_intro_style_icon(x, y, 3)
         # Streep er doorheen
-        self.display.line(x, y + 1, x + 6, y + 7, 1)
+        self.display.line(x + 1, y + 1, x + 14, y + 10, 1)
 
     def _fetch_weather(self):
         """Haal actueel weer op van Open-Meteo (plain HTTP, geen API-key)."""
@@ -1492,6 +2129,74 @@ class App:
         except Exception as e:
             print("! Weer ophalen mislukt:", e)
 
+    def _url_quote(self, value):
+        text = str(value or "")
+        if quote is not None:
+            try:
+                return quote(text)
+            except Exception:
+                pass
+        safe = []
+        for ch in text:
+            code = ord(ch)
+            if (48 <= code <= 57) or (65 <= code <= 90) or (97 <= code <= 122) or ch in "-_.~":
+                safe.append(ch)
+            elif ch == " ":
+                safe.append("%20")
+            else:
+                safe.append("%%%02X" % code)
+        return "".join(safe)
+
+    def _resolve_weather_location(self, place_name):
+        """Zoek plaatsnaam op via Open-Meteo geocoding API en geef beste match terug."""
+        host = "geocoding-api.open-meteo.com"
+        encoded = self._url_quote(place_name)
+        path = "/v1/search?name={}&count=1&language=nl&format=json".format(encoded)
+        s = socket.socket()
+        try:
+            s.settimeout(8)
+            addr = socket.getaddrinfo(host, 80)[0][-1]
+            s.connect(addr)
+            s.send((
+                "GET {} HTTP/1.0\r\n"
+                "Host: {}\r\n\r\n"
+            ).format(path, host).encode())
+            resp = b""
+            while True:
+                chunk = s.recv(256)
+                if not chunk:
+                    break
+                resp += chunk
+        finally:
+            try:
+                s.close()
+            except Exception:
+                pass
+
+        idx = resp.find(b"\r\n\r\n")
+        if idx < 0:
+            raise ValueError("Geen geldig antwoord van geocoding")
+        payload = json.loads(resp[idx + 4:].decode())
+        results = payload.get("results") or []
+        if not results:
+            raise ValueError("Plaats niet gevonden")
+
+        best = results[0]
+        resolved_name = best.get("name") or str(place_name)
+        admin1 = best.get("admin1")
+        country = best.get("country")
+        parts = [resolved_name]
+        if admin1 and admin1 != resolved_name:
+            parts.append(admin1)
+        if country:
+            parts.append(country)
+
+        return {
+            "place": ", ".join(parts),
+            "latitude": float(best.get("latitude")),
+            "longitude": float(best.get("longitude")),
+        }
+
     def _check_weather_fetch(self):
         """Roep dit aan vanuit de main loop. Zet WiFi tijdelijk aan als nodig."""
         if not self.config or not self.config.get("weather", "enabled", True):
@@ -1534,9 +2239,9 @@ class App:
             int(self._rtc_temp + 0.5) if self._rtc_temp is not None else None)
         if disp_temp is not None:
             temp_str = "{}C".format(disp_temp)
-            self.display.text(temp_str, 96 - len(temp_str) * 8 - 2, 50, 1)
+            self.display.text(temp_str, 96 - len(temp_str) * 8 - 2, 56, 1)
 
-        x, y = 96, 50
+        x, y = 96, 56
         h = int(t[3])
         self._weather_phase = (self._weather_phase + 1) % 20
 
@@ -1624,26 +2329,26 @@ class App:
     def _apply_display_brightness(self, force=False):
         if not self.display:
             return
-        t = self.clock.read_time()
-        h = int(t[3])
-        night = (h >= NIGHT_DIM_START_HOUR or h < NIGHT_DIM_END_HOUR)
         boss = self._alarm_boss_level() > 0
-        state = "night" if night else "day"
-        if boss:
-            state = "boss"
+        # Stabiele helderheid: geen automatische dag/nacht-wissel.
+        state = ("boss", self._display_manual_mode) if boss else ("steady", self._display_manual_mode)
         if (not force) and state == self._display_dim_state:
             return
         self._display_dim_state = state
         try:
             self.display.write_cmd(0x81)
-            if state == "night":
-                self.display.write_cmd(0x30)
-            elif state == "boss":
+            if boss:
                 self.display.write_cmd(0xCF)
             else:
-                self.display.write_cmd(0x7F)
+                # Alleen handmatige standen, zonder automatische tijdsafhankelijke puls/wissel.
+                values = (0xCF, 0x2A, 0x05)
+                self.display.write_cmd(values[self._display_manual_mode])
         except Exception:
             pass
+
+    def _apply_clock_dither(self, t):
+        # Dither uitgeschakeld: voorkomt zichtbaar flikkeren/ademen op sommige OLED panelen.
+        return
 
     def _draw_clock_layout(self):
         t = self.clock.read_time()
@@ -1669,35 +2374,80 @@ class App:
                 self._transition_buf = None
                 if self.leds:
                     try:
-                        self.leds.clear()
+                        if self._nightlight_on:
+                            for i in range(self.leds.num_leds):
+                                self.leds.set_pixel(i, 255, 120, 40)
+                            self.leds.show()
+                        else:
+                            self.leds.clear()
                     except Exception:
                         pass
                 gc.collect()
             return
 
         self._update_easter_egg(t)
+        # Nachtlampje bijhouden buiten transitie/alarm
+        if self.leds and self._nightlight_on and self.alarm_until is None:
+            try:
+                for i in range(self.leds.num_leds):
+                    self.leds.set_pixel(i, 255, 120, 40)
+                self.leds.show()
+            except Exception:
+                pass
         self.display.fill(0)
         self._draw_big_time(t[3], t[4])
-        # Alarm line (y=38): eerstvolgende alarm met dagafkorting, of --:-- als geen alarm gepland.
-        next_alarm = self._next_alarm_info(t)
-        if next_alarm:
-            day_str, ah, am = next_alarm
-            if not day_str:
-                day_str = self._weekday_short(t[6])  # vandaag, nog in de toekomst
-            alarm_text = "{} {:02d}:{:02d}".format(day_str, ah, am)
-            self._draw_alarm_icon(0, 38)
-            self.display.text(alarm_text, 10, 38, 1)
+        # Alarmregel: normaal het eerstvolgende alarm, maar tijdens snooze een countdown.
+        snooze_sec = self._snooze_remaining_seconds()
+        if snooze_sec > 0:
+            sh = snooze_sec // 3600
+            sm = (snooze_sec % 3600) // 60
+            ss = snooze_sec % 60
+            self.display.text("SNOOZE {:02d}:{:02d}:{:02d}".format(sh, sm, ss), 0, 44, 1)
         else:
-            self.display.text("--:--", 10, 38, 1)
+            next_alarm = self._next_alarm_info(t)
+            if next_alarm:
+                day_str, ah, am = next_alarm
+                if not day_str:
+                    day_str = self._weekday_short(t[6])  # vandaag, nog in de toekomst
+                alarm_text = "{} {:02d}:{:02d}".format(day_str, ah, am)
+                self._draw_alarm_icon(0, 44)
+                self.display.text(alarm_text, 10, 44, 1)
+            else:
+                self.display.text("--:--", 10, 44, 1)
         # Day + date lines
-        self.display.text(self._weekday_short(t[6]), 0, 50, 1)
-        self.display.text("{:02d}-{:02d}".format(t[2], t[1]), 24, 50, 1)
+        self.display.text(self._weekday_short(t[6]), 0, 56, 1)
+        self.display.text("{:02d}-{:02d}".format(t[2], t[1]), 24, 56, 1)
         self._draw_weather_overlay(t)
         if self.wifi_disabled:
-            self._draw_wifi_off_icon(WIDTH - 8, HEIGHT - 8)
+            self._draw_wifi_off_icon(WIDTH - 16, HEIGHT - 11)
         elif self.wifi_ok and self.wifi and self.wifi.is_connected():
-            self._draw_wifi_status_icon(WIDTH - 8, HEIGHT - 8)
+            self._draw_wifi_status_icon(WIDTH - 16, HEIGHT - 11)
+
+        # Korte statusmelding na SET-kort in standaard scherm.
+        now_ms = time.ticks_ms()
+        if self._set_feedback_until and time.ticks_diff(self._set_feedback_until, now_ms) > 0:
+            # Volledig scherm wissen en feedback tonen
+            self.display.fill(0)
+            lines = self._set_feedback_lines if self._set_feedback_lines else [self._set_feedback_text]
+            y_positions = [2, 14, 26, 36, 48, 56]
+            line_idx = 0
+            y_idx = 0
+            while line_idx < len(lines) and y_idx < len(y_positions):
+                ln = lines[line_idx]
+                if ln == "---":
+                    self.display.hline(4, y_positions[y_idx] + 3, 120, 1)
+                elif ln:
+                    x = max(0, (128 - len(ln) * 8) // 2)
+                    self.display.text(ln, x, y_positions[y_idx], 1)
+                y_idx += 1
+                line_idx += 1
+        elif self._set_feedback_until:
+            self._set_feedback_until = 0
+            self._set_feedback_text = ""
+            self._set_feedback_lines = []
+
         self._draw_easter_overlay()
+        self._apply_clock_dither(t)
         self.display.show()
 
     # ═══════════════════════════════════════════════════════════════════════
@@ -1715,12 +2465,12 @@ class App:
             day_str, ah, am = next_alarm
             if not day_str:
                 day_str = self._weekday_short(t[6])
-            self._draw_alarm_icon(0, 38)
-            self.display.text("{} {:02d}:{:02d}".format(day_str, ah, am), 10, 38, 1)
+            self._draw_alarm_icon(0, 44)
+            self.display.text("{} {:02d}:{:02d}".format(day_str, ah, am), 10, 44, 1)
         else:
-            self.display.text("--:--", 10, 38, 1)
-        self.display.text(self._weekday_short(t[6]), 0, 50, 1)
-        self.display.text("{:02d}-{:02d}".format(t[2], t[1]), 24, 50, 1)
+            self.display.text("--:--", 10, 44, 1)
+        self.display.text(self._weekday_short(t[6]), 0, 56, 1)
+        self.display.text("{:02d}-{:02d}".format(t[2], t[1]), 24, 56, 1)
         self._draw_weather_overlay(t)
         snapshot = bytearray(self.display.buffer)
         self.display.buffer[:] = old_buf   # herstel
@@ -2003,190 +2753,329 @@ class App:
         d.show()
 
     def _draw_sonic_animation(self, frame, intensity):
-        """Sonic theme: checker ground, running sprite silhouette and floating ring."""
+        """Green Hill Zone: rolling hills, detailed Sonic sprite, rings, speed lines."""
         d = self.display
         d.fill(0)
 
-        # Fast background streaks.
-        speed = frame % 32
-        for y in (6, 11, 16, 21):
-            x = -(speed * 4 + y * 3) % 36
-            while x < 128:
-                d.hline(x, y, 10 + (y % 3) * 4, 1)
-                x += 28
+        # Sky: distant checkered pattern (GHZ style)
+        for sy in range(0, 20, 4):
+            for sx in range(0, 128, 8):
+                if (sx // 8 + sy // 4) % 2 == 0:
+                    d.fill_rect(sx, sy, 4, 2, 1)
 
-        # Checker-like ground band.
-        d.hline(0, 44, 128, 1)
-        for i in range(34):
-            x = i * 4 - (frame * 2 % 8)
-            if i % 2 == 0:
-                d.fill_rect(x, 45, 4, 4, 1)
-        d.fill_rect(0, 49, 128, 15, 1)
+        # Far rolling hill (slow)
+        ho1 = (frame // 4) % 64
+        for hx in range(0, 128):
+            hpeak = 20 - 8 * abs(((hx + ho1) % 64) - 32) // 32
+            d.vline(hx, hpeak, 22 - hpeak, 1)
 
-        # Floating ring (right side).
-        ring_x = 96
-        ring_y = 24 + ((frame // 4) % 4 - 2)
-        d.rect(ring_x, ring_y, 14, 14, 1)
-        d.rect(ring_x + 2, ring_y + 2, 10, 10, 0)
-        if (frame // 3) % 2 == 0:
-            d.pixel(ring_x - 2, ring_y + 6, 1)
-            d.pixel(ring_x + 16, ring_y + 6, 1)
+        # Near hill (faster, higher)
+        ho2 = (frame // 2) % 48
+        for hx in range(0, 128):
+            hpeak = 26 - 6 * abs(((hx + ho2) % 48) - 24) // 24
+            d.vline(hx, hpeak, 30 - hpeak, 1)
 
-        # Sonic-like running silhouette.
-        x = 18 + ((frame // 2) % 16)
-        y = 32
-        d.fill_rect(x + 2, y, 6, 4, 1)      # quills/head
-        d.fill_rect(x + 1, y + 4, 8, 4, 1)  # torso
-        d.fill_rect(x + 3, y + 8, 2, 4, 1)  # left leg
-        d.fill_rect(x + 6, y + 8, 2, 4, 1)  # right leg
-        if (frame // 3) % 2 == 0:
-            d.fill_rect(x, y + 5, 2, 2, 1)
-            d.fill_rect(x + 8, y + 3, 2, 2, 1)
+        # Ground
+        d.fill_rect(0, 30, 128, 6, 0)
+        d.hline(0, 30, 128, 1)
+        d.hline(0, 36, 128, 1)
+        # Checkerboard tiles scrolling
+        tile_off = (frame * 3) % 16
+        for tx in range(0, 128, 16):
+            x = tx - tile_off
+            d.fill_rect(x, 31, 8, 5, 1)
+        d.fill_rect(0, 37, 128, 27, 1)
+
+        # Speed lines behind Sonic
+        sx0 = 28
+        for i, (ly, llen) in enumerate(((33, 14), (35, 18), (37, 12))):
+            d.hline(sx0 - llen - i * 3, ly, llen, 0)
+
+        # Sonic sprite (12x14) at fixed position
+        sx, sy = 30, 17
+        leg = (frame // 2) % 4
+        # Spines (3 spikes going back-left)
+        d.line(sx + 4, sy, sx, sy - 3, 1)
+        d.line(sx + 6, sy + 1, sx + 2, sy - 2, 1)
+        d.line(sx + 8, sy + 2, sx + 5, sy - 1, 1)
+        # Head
+        d.fill_rect(sx + 4, sy, 8, 7, 1)
+        d.pixel(sx + 10, sy + 2, 0)  # eye
+        # Torso
+        d.fill_rect(sx + 3, sy + 7, 7, 5, 1)
+        # Arm
+        if frame % 4 < 2:
+            d.fill_rect(sx + 10, sy + 8, 4, 2, 1)
         else:
-            d.fill_rect(x, y + 3, 2, 2, 1)
-            d.fill_rect(x + 8, y + 5, 2, 2, 1)
+            d.fill_rect(sx + 10, sy + 9, 4, 2, 1)
+        # Legs
+        if leg < 2:
+            d.fill_rect(sx + 3, sy + 12, 3, 4, 1)
+            d.fill_rect(sx + 7, sy + 10, 3, 4, 1)
+        else:
+            d.fill_rect(sx + 3, sy + 10, 3, 4, 1)
+            d.fill_rect(sx + 7, sy + 12, 3, 4, 1)
+        # Red shoe hint
+        d.hline(sx + 2, sy + 14, 5, 1)
+        d.hline(sx + 6, sy + 13, 5, 1)
 
-        # Boss/intensity meter.
-        meter = max(0, min(100, int(intensity)))
-        d.rect(2, 2, 34, 6, 1)
-        d.fill_rect(3, 3, meter * 32 // 100, 4, 1)
-        d.text("SONIC", 42, 0, 1)
+        # Ring (right side, bobbing)
+        ry = 20 + ((frame // 5) % 3)
+        d.rect(90, ry, 10, 10, 1)
+        d.rect(92, ry + 2, 6, 6, 0)
+        # Shine on ring
+        if (frame // 4) % 2 == 0:
+            d.pixel(91, ry + 1, 1)
+            d.pixel(92, ry, 1)
+
+        # HUD
+        d.text("SONIC", 68, 0, 1)
+        score = (frame * 77) % 9999
+        d.text(str(score), 68, 10, 1)
+        if (frame // 8) % 2 == 0:
+            d.fill_rect(0, 56, 128, 8, 1)
+            d.text("ALARM!", 40, 56, 0)
+        else:
+            d.text("ALARM!", 40, 56, 1)
         d.show()
 
     def _draw_metroid_animation(self, frame, intensity):
-        """Metroid theme: visor HUD, scanline and charging cannon."""
+        """Samus in Chozo ruins: detailed armor silhouette, charging beam, lava glow."""
         d = self.display
         d.fill(0)
 
-        # Visor/HUD frame.
-        d.rect(0, 0, 128, 64, 1)
-        d.hline(0, 10, 128, 1)
-        d.hline(0, 52, 128, 1)
-        d.vline(14, 10, 42, 1)
-        d.vline(113, 10, 42, 1)
+        # Lava at bottom (pulsing)
+        lava_y = 52 + (frame // 6) % 3
+        d.fill_rect(0, lava_y, 128, 64 - lava_y, 1)
+        for bx in range(0, 128, 12):
+            boff = (bx + frame * 2) % 24
+            by = lava_y - 2 - (boff % 5)
+            d.fill_rect(bx, by, 6, lava_y - by, 0)
 
-        # Scanning line sweeps in the viewport.
-        sy = 12 + (frame * 2 % 38)
-        d.hline(16, sy, 96, 1)
+        # Pillars (Chozo ruins)
+        for px in (2, 108):
+            d.fill_rect(px, 20, 14, lava_y - 20, 1)
+            d.fill_rect(px - 2, 18, 18, 4, 1)  # capital
+            d.fill_rect(px - 2, lava_y - 4, 18, 4, 1)  # base
+            for gy in range(24, lava_y - 4, 8):
+                d.hline(px + 1, gy, 12, 0)
 
-        # Core orb in the center.
-        cx, cy = 64, 31
-        pulse = (frame // 3) % 6
-        d.rect(cx - 10, cy - 10, 20, 20, 1)
-        d.rect(cx - 7, cy - 7, 14, 14, 1)
-        d.fill_rect(cx - 2 - (pulse // 3), cy - 2 - (pulse // 3), 4 + (pulse // 2), 4 + (pulse // 2), 1)
+        # Samus armor silhouette (centered)
+        sx, sy = 52, 4
+        # Helmet (round top)
+        d.fill_rect(sx + 4, sy, 16, 4, 1)
+        d.fill_rect(sx + 2, sy + 2, 20, 10, 1)
+        d.fill_rect(sx + 6, sy + 5, 12, 5, 0)  # visor cutout
+        d.fill_rect(sx + 8, sy + 6, 8, 3, 1)   # visor glow
+        # Shoulders
+        d.fill_rect(sx, sy + 10, 8, 8, 1)
+        d.fill_rect(sx + 16, sy + 10, 8, 8, 1)
+        d.fill_rect(sx, sy + 10, 8, 3, 1)  # shoulder cap
+        d.fill_rect(sx + 16, sy + 10, 8, 3, 1)
+        # Torso
+        d.fill_rect(sx + 6, sy + 12, 12, 10, 1)
+        d.hline(sx + 8, sy + 16, 8, 0)  # chest detail
+        # Arm cannon (right)
+        cannon_len = 12 + ((frame // 3) % 4)
+        d.fill_rect(sx + 24, sy + 13, cannon_len, 5, 1)
+        d.fill_rect(sx + 22, sy + 12, 4, 7, 1)  # cannon joint
+        # Charge ball at cannon tip
+        pulse = (frame // 2) % 6
+        tip_x = sx + 24 + cannon_len
+        if pulse < 3:
+            d.fill_rect(tip_x, sy + 13, 4, 5, 1)
+        else:
+            d.fill_rect(tip_x - 1, sy + 12, 6, 7, 1)
+            if pulse == 5:
+                d.pixel(tip_x + 2, sy + 15, 0)  # core
+        # Left arm
+        d.fill_rect(sx - 4, sy + 13, 12, 4, 1)
+        # Legs
+        d.fill_rect(sx + 5, sy + 22, 5, 10, 1)
+        d.fill_rect(sx + 14, sy + 22, 5, 10, 1)
+        d.fill_rect(sx + 3, sy + 30, 7, 4, 1)  # boot left
+        d.fill_rect(sx + 14, sy + 30, 7, 4, 1)  # boot right
 
-        # Cannon charge on right side.
+        # Energy bar (top)
         charge = max(0, min(100, int(intensity)))
-        d.rect(100, 22, 20, 8, 1)
-        d.fill_rect(101, 23, charge * 18 // 100, 6, 1)
-        if charge > 70 and (frame // 2) % 2 == 0:
-            d.line(120, 26, 127, 22, 1)
-            d.line(120, 26, 127, 30, 1)
+        d.text("E", 0, 0, 1)
+        d.rect(10, 1, 52, 6, 1)
+        d.fill_rect(11, 2, charge * 50 // 100, 4, 1)
 
-        # Energy tanks (bottom strip).
-        tanks = max(1, charge // 20)
-        for i in range(5):
-            x = 20 + i * 18
-            d.rect(x, 55, 14, 7, 1)
-            if i < tanks:
-                d.fill_rect(x + 2, 57, 10, 3, 1)
-
-        d.text("METROID", 34, 1, 1)
+        if (frame // 8) % 2 == 0:
+            d.fill_rect(0, 56, 128, 8, 1)
+            d.text("ALARM!", 40, 56, 0)
+        else:
+            d.text("ALARM!", 40, 56, 1)
         d.show()
 
     def _draw_pokemon_animation(self, frame, intensity):
-        """Pokemon theme: classic battle HUD with trainer/monster silhouettes."""
+        """Gen-1 battle scene: proper HUD boxes, Pikachu silhouette, trainer, pokeball."""
         d = self.display
         d.fill(0)
 
-        # Battle horizon and grass lines.
-        d.hline(0, 30, 128, 1)
-        drift = frame % 8
-        for y in (33, 37, 41, 45):
-            d.hline((y * 3 + drift * 2) % 20 - 20, y, 148, 1)
+        # Battle field divider
+        d.hline(0, 28, 128, 1)
+        d.hline(0, 29, 128, 1)
 
-        # Enemy silhouette (upper-right).
-        ex, ey = 88, 11
-        d.fill_rect(ex + 3, ey, 10, 3, 1)
-        d.fill_rect(ex + 1, ey + 3, 14, 5, 1)
-        d.fill_rect(ex + 4, ey + 8, 8, 4, 1)
-        if (frame // 6) % 2 == 0:
-            d.pixel(ex + 4, ey + 4, 0)
-            d.pixel(ex + 10, ey + 4, 0)
+        # Pikachu-like silhouette (enemy, top-right)
+        px, py = 76, 2
+        # Ears (pointy)
+        d.line(px + 4, py, px + 2, py - 4, 1)
+        d.line(px + 2, py - 4, px + 1, py - 4, 1)
+        d.line(px + 9, py, px + 11, py - 4, 1)
+        d.line(px + 11, py - 4, px + 12, py - 4, 1)
+        # Head
+        d.fill_rect(px + 1, py, 12, 10, 1)
+        d.pixel(px + 3, py + 3, 0)  # left eye
+        d.pixel(px + 9, py + 3, 0)  # right eye
+        d.pixel(px + 5, py + 6, 0)  # nose
+        d.pixel(px + 7, py + 6, 0)
+        # Cheeks (round)
+        d.fill_rect(px - 1, py + 4, 3, 3, 1)
+        d.fill_rect(px + 12, py + 4, 3, 3, 1)
+        # Body
+        d.fill_rect(px + 2, py + 10, 10, 7, 1)
+        # Tail (lightning bolt hint)
+        d.line(px + 12, py + 12, px + 16, py + 8, 1)
+        d.line(px + 16, py + 8, px + 20, py + 14, 1)
+        # Legs
+        d.fill_rect(px + 3, py + 17, 3, 4, 1)
+        d.fill_rect(px + 8, py + 17, 3, 4, 1)
 
-        # Player/trainer silhouette (lower-left).
-        px, py = 14, 34
-        d.fill_rect(px + 2, py, 5, 4, 1)
-        d.fill_rect(px + 1, py + 4, 7, 6, 1)
-        d.fill_rect(px + 2, py + 10, 2, 4, 1)
-        d.fill_rect(px + 5, py + 10, 2, 4, 1)
+        # Trainer silhouette (player, bottom-left)
+        tx, ty = 8, 16
+        d.fill_rect(tx + 3, ty, 6, 5, 1)   # head
+        d.fill_rect(tx + 2, ty + 5, 8, 8, 1)  # body
+        d.fill_rect(tx, ty + 6, 3, 5, 1)   # arm (throwing)
+        d.fill_rect(tx + 9, ty + 7, 3, 4, 1)
+        d.fill_rect(tx + 3, ty + 13, 3, 5, 1)  # legs
+        d.fill_rect(tx + 6, ty + 13, 3, 5, 1)
 
-        # Pokeball throw arc.
-        ball_x = 28 + (frame * 3 % 68)
-        arc = (ball_x - 62)
-        ball_y = 46 - (arc * arc // 140)
-        d.rect(ball_x, max(6, ball_y), 4, 4, 1)
-        d.hline(ball_x, max(6, ball_y + 2), 4, 1)
+        # Pokeball arc
+        progress = (frame * 2) % 80
+        bx = 22 + progress
+        arc_h = 22 - ((progress - 40) * (progress - 40)) // 73
+        by2 = max(6, arc_h)
+        d.rect(bx, by2, 6, 6, 1)
+        d.hline(bx, by2 + 3, 6, 1)  # equator line
+        d.pixel(bx + 2, by2 + 2, 0)
+        d.pixel(bx + 3, by2 + 2, 0)  # button
 
-        # HP UI boxes.
+        # Enemy HP box (top-left)
+        d.rect(0, 0, 62, 12, 1)
+        d.text("PIKACHU", 2, 1, 1)
+        d.rect(0, 9, 62, 4, 1)
         hp = max(0, min(100, int(intensity)))
-        d.rect(5, 2, 48, 10, 1)
-        d.text("YOU", 8, 4, 1)
-        d.rect(54, 4, 44, 6, 1)
-        d.fill_rect(55, 5, hp * 42 // 100, 4, 1)
-        d.rect(75, 52, 48, 10, 1)
-        d.text("FOE", 78, 54, 1)
-        d.text("PKMN", 52, 0, 1)
+        d.fill_rect(1, 10, hp * 60 // 100, 2, 1)
+
+        # Player status box bottom
+        d.rect(66, 30, 62, 12, 1)
+        d.text("TRAINER", 68, 31, 1)
+        d.rect(66, 39, 62, 4, 1)
+        d.fill_rect(67, 40, 60, 2, 1)
+
+        # Battle text box
+        d.rect(0, 45, 128, 19, 1)
+        blink = (frame // 6) % 2
+        if blink == 0:
+            d.text("WAKE  UP!", 4, 48, 1)
+        else:
+            d.text("WAKE  UP!", 4, 56, 1)
+        d.pixel(120, 56, 1)
+        d.pixel(122, 54, 1)
+        d.pixel(124, 56, 1)
         d.show()
 
     def _draw_tetris_animation(self, frame, intensity):
-        """Tetris theme: board, stack silhouette and animated falling tetromino."""
+        """Tetris: detailed board with grid, filled stack, active piece, next+score panel."""
         d = self.display
         d.fill(0)
 
-        bx, by, cell = 18, 8, 3
-        bw, bh = 10 * cell, 16 * cell
-        d.rect(bx - 1, by - 1, bw + 2, bh + 2, 1)
+        bx, by, cell = 4, 2, 5
+        cols, rows = 9, 12
 
-        # Existing stack silhouette (deterministic skyline).
-        for col in range(10):
-            h = 2 + ((col * 3 + frame // 7) % 7)
-            for row in range(h):
-                if row < 14:
-                    y = by + (15 - row) * cell
-                    x = bx + col * cell
-                    d.fill_rect(x, y, cell, cell, 1)
+        # Board outline + grid
+        d.rect(bx - 1, by - 1, cols * cell + 2, rows * cell + 2, 1)
+        for gx in range(1, cols):
+            d.vline(bx + gx * cell, by, rows * cell, 1)
+        for gy in range(1, rows):
+            d.hline(bx, by + gy * cell, cols * cell, 1)
 
-        # Falling piece animation.
-        shape = (frame // 18) % 4
-        drop = (frame * 2) % (15 * cell)
-        px = bx + (2 + (frame // 32) % 5) * cell
-        py = by + drop
-        if shape == 0:  # I
-            d.fill_rect(px, py, cell, cell * 4, 1)
-        elif shape == 1:  # O
-            d.fill_rect(px, py, cell * 2, cell * 2, 1)
-        elif shape == 2:  # T
-            d.fill_rect(px, py, cell * 3, cell, 1)
-            d.fill_rect(px + cell, py + cell, cell, cell, 1)
-        else:  # L
-            d.fill_rect(px, py, cell, cell * 3, 1)
-            d.fill_rect(px, py + cell * 2, cell * 2, cell, 1)
+        # Static stack (deterministic per frame-epoch)
+        epoch = frame // 60
+        stack_heights = [(4 + ((i * 5 + epoch * 3) % 5)) for i in range(cols)]
+        for col in range(cols):
+            sh = stack_heights[col]
+            for row in range(sh):
+                ry = rows - 1 - row
+                cx2 = bx + col * cell + 1
+                cy2 = by + ry * cell + 1
+                d.fill_rect(cx2, cy2, cell - 2, cell - 2, 1)
+                # Checker pattern on filled cells
+                if (col + row) % 2 == 0:
+                    d.pixel(cx2 + 1, cy2 + 1, 0)
 
-        # Side panel.
-        d.text("TETRIS", 64, 8, 1)
-        d.text("NEXT", 70, 20, 1)
-        d.rect(72, 30, 18, 12, 1)
-        d.fill_rect(74, 34, 4, 4, 1)
-        d.fill_rect(78, 34, 4, 4, 1)
-        d.fill_rect(82, 34, 4, 4, 1)
-        d.text("LV", 74, 48, 1)
-        d.text(str(max(1, intensity // 10)), 90, 48, 1)
+        # Line clear flash
+        full_row = rows - 1
+        all_full = all(stack_heights[c] >= 1 for c in range(cols))
+        if all_full and (frame // 3) % 2 == 0:
+            d.fill_rect(bx, by + full_row * cell, cols * cell, cell, 0)
+
+        # Falling piece
+        shape = (frame // 24) % 5
+        max_drop = (rows - max(stack_heights)) * cell
+        drop = (frame * 2) % max(cell, max_drop)
+        px2 = bx + (1 + (frame // 40) % (cols - 3)) * cell
+        py2 = by + drop
+        if shape == 0:   # I (horizontal)
+            for i in range(4):
+                d.rect(px2 + i * cell, py2, cell - 1, cell - 1, 1)
+        elif shape == 1: # O
+            d.rect(px2, py2, cell - 1, cell - 1, 1)
+            d.rect(px2 + cell, py2, cell - 1, cell - 1, 1)
+            d.rect(px2, py2 + cell, cell - 1, cell - 1, 1)
+            d.rect(px2 + cell, py2 + cell, cell - 1, cell - 1, 1)
+        elif shape == 2: # T
+            for i in range(3):
+                d.rect(px2 + i * cell, py2, cell - 1, cell - 1, 1)
+            d.rect(px2 + cell, py2 + cell, cell - 1, cell - 1, 1)
+        elif shape == 3: # S
+            d.rect(px2 + cell, py2, cell - 1, cell - 1, 1)
+            d.rect(px2 + 2 * cell, py2, cell - 1, cell - 1, 1)
+            d.rect(px2, py2 + cell, cell - 1, cell - 1, 1)
+            d.rect(px2 + cell, py2 + cell, cell - 1, cell - 1, 1)
+        else:            # L
+            for i in range(3):
+                d.rect(px2, py2 + i * cell, cell - 1, cell - 1, 1)
+            d.rect(px2 + cell, py2 + 2 * cell, cell - 1, cell - 1, 1)
+
+        # Side panel
+        px3 = bx + cols * cell + 6
+        d.text("TETRIS", px3, 0, 1)
+        d.hline(px3, 9, 40, 1)
+        d.text("NEXT", px3, 12, 1)
+        # Next piece preview
+        d.rect(px3, 21, 20, 14, 1)
+        next_s = (shape + 1) % 5
+        if next_s < 2:
+            d.fill_rect(px3 + 2, px3 - 48, 16, 5, 1)
+        else:
+            d.fill_rect(px3 + 2, 24, 6, 5, 1)
+            d.fill_rect(px3 + 8, 24, 6, 5, 1)
+        d.text("SCORE", px3, 38, 1)
+        score = (frame * 13 + intensity * 7) % 9999
+        d.text(str(score), px3, 48, 1)
+
+        if (frame // 8) % 2 == 0:
+            d.fill_rect(0, 56, 128, 8, 1)
+            d.text("ALARM!", 40, 56, 0)
+        else:
+            d.text("ALARM!", 40, 56, 1)
         d.show()
 
     def _draw_moonstone_animation(self, frame, intensity):
-        """Moonstone sequence: logo intro, then alternating knight and monster close-ups."""
+        """Moonstone: detailed knight/dragon battle with sword swings and fire breath."""
         d = self.display
         d.fill(0)
 
@@ -2287,41 +3176,84 @@ class App:
         d.show()
 
     def _draw_arcade_animation(self, frame, intensity):
-        """Arcade theme: animated cabinet with mini pong game on CRT."""
+        """Space Invaders: alien formation, shields, player cannon, bomb/laser battle."""
         d = self.display
         d.fill(0)
 
-        # Cabinet body.
-        d.rect(28, 2, 72, 60, 1)
-        d.rect(34, 8, 60, 30, 1)
-        d.rect(40, 42, 48, 8, 1)
-        d.text("ARCADE", 44, 2, 1)
+        # Alien sprites (3 rows × 8 cols), each 10px wide 7px tall
+        def draw_alien(ax, ay, t):
+            # Row-dependent shape
+            if t == 0:  # top row: crab
+                d.pixel(ax + 1, ay, 1); d.pixel(ax + 8, ay, 1)
+                d.fill_rect(ax + 2, ay + 1, 6, 3, 1)
+                d.pixel(ax, ay + 2, 1); d.pixel(ax + 9, ay + 2, 1)
+                d.fill_rect(ax + 1, ay + 4, 8, 2, 1)
+                d.pixel(ax + 2, ay + 6, 1); d.pixel(ax + 7, ay + 6, 1)
+            elif t == 1:  # middle row: squid
+                d.fill_rect(ax + 3, ay, 4, 2, 1)
+                d.fill_rect(ax + 1, ay + 2, 8, 3, 1)
+                d.pixel(ax, ay + 2, 1); d.pixel(ax + 9, ay + 2, 1)
+                d.pixel(ax + 1, ay + 5, 1); d.pixel(ax + 4, ay + 5, 1)
+                d.pixel(ax + 5, ay + 5, 1); d.pixel(ax + 8, ay + 5, 1)
+            else:  # bottom row: jellyfish
+                d.fill_rect(ax + 1, ay, 8, 5, 1)
+                d.pixel(ax, ay + 1, 1); d.pixel(ax + 9, ay + 1, 1)
+                d.fill_rect(ax, ay + 5, 3, 2, 1)
+                d.fill_rect(ax + 7, ay + 5, 3, 2, 1)
 
-        # CRT scanlines.
-        for y in range(10, 36, 3):
-            d.hline(36, y, 56, 1)
+        march = (frame // 8) % 2  # aliens march left/right
+        formation_x = 6 + march * 4
+        formation_y = 2 + ((frame // 16) % 3)  # slowly descend
+        for row in range(3):
+            for col in range(8):
+                ax = formation_x + col * 14
+                ay = formation_y + row * 9
+                if ax < 120:  # clip
+                    draw_alien(ax, ay, row)
 
-        # Mini pong animation on screen.
-        paddle_y = 13 + ((frame // 3) % 16)
-        d.fill_rect(38, paddle_y, 2, 8, 1)
-        d.fill_rect(88, 26 - ((frame // 5) % 12), 2, 8, 1)
-        bx = 44 + (frame * 3 % 40)
-        by = 14 + ((frame * 2) % 16)
-        if (frame // 14) % 2 == 1:
-            bx = 84 - (frame * 3 % 40)
-        d.fill_rect(bx, by, 2, 2, 1)
+        # Bombs falling from random aliens
+        for i in range(3):
+            bomb_col = (frame // 5 + i * 3) % 8
+            bomb_x = formation_x + bomb_col * 14 + 4
+            bomb_y = formation_y + 28 + ((frame * 2 + i * 13) % 20)
+            if bomb_y < 44:
+                d.vline(bomb_x, bomb_y, 4, 1)
 
-        # Control panel details.
-        d.fill_rect(46, 44, 6, 3, 1)
-        d.fill_rect(56, 44, 3, 3, 1)
-        d.fill_rect(62, 44, 3, 3, 1)
-        d.fill_rect(68, 44, 3, 3, 1)
+        # Shields (3 bunkers)
+        for si in range(3):
+            sx = 10 + si * 38
+            damage = (frame // 20 + si) % 4
+            d.fill_rect(sx, 44, 20, 6, 1)
+            # Notch bottom center (cannon port)
+            d.fill_rect(sx + 7, 48, 6, 2, 0)
+            # Damage holes
+            for di in range(damage):
+                d.fill_rect(sx + 2 + di * 4, 44 + (di % 3), 3, 3, 0)
+
+        # Player cannon
+        cx = 60 + ((frame // 3) % 4 - 2) * 2
+        d.fill_rect(cx - 6, 52, 12, 4, 1)    # base
+        d.fill_rect(cx - 1, 50, 3, 3, 1)     # barrel
+        d.fill_rect(cx - 3, 51, 7, 1, 1)     # turret top
+
+        # Player laser
+        if (frame // 4) % 6 == 0:
+            d.vline(cx, 36, 14, 1)
+            d.pixel(cx - 1, 36, 1)
+            d.pixel(cx + 1, 36, 1)
+
+        # Score + lives
+        score = (frame * 10) % 9999
+        d.text(str(score), 0, 57, 1)
+        for li in range(3):
+            d.fill_rect(100 + li * 9, 57, 7, 6, 1)
+            d.fill_rect(101 + li * 9, 57, 2, 2, 0)
+            d.fill_rect(104 + li * 9, 57, 2, 2, 0)
+
         if (frame // 8) % 2 == 0:
-            d.text("COIN", 46, 53, 1)
-
-        score = (frame * (max(1, int(intensity)))) % 9999
-        d.text("HI", 4, 8, 1)
-        d.text(str(score), 4, 18, 1)
+            d.fill_rect(0, 56, 60, 8, 0)  # clear score area for alarm
+            d.fill_rect(0, 56, 128, 8, 1)
+            d.text("ALARM!", 40, 56, 0)
         d.show()
 
     def _draw_mario_animation(self, frame):
@@ -2448,12 +3380,106 @@ class App:
         d.text("GET READY", 30, 50, 0 if w > 90 else 1)
         d.show()
 
+    def _open_gif_by_name(self, name):
+        if not name:
+            return False
+        path = "/{}.bin".format(name)
+        try:
+            f = open(path, "rb")
+        except OSError:
+            return False
+        try:
+            magic = f.read(2)
+            if magic != bytes([0x47, 0xAF]):
+                f.close()
+                return False
+            n = (f.read(1)[0] << 8) | f.read(1)[0]
+            w = f.read(1)[0]
+            h = f.read(1)[0]
+            if w != 128 or h != 64:
+                print("GIF alarm: verwacht 128x64, got {}x{}".format(w, h))
+                f.close()
+                return False
+            delays = []
+            for _ in range(n):
+                hi = f.read(1)[0]
+                lo = f.read(1)[0]
+                delays.append((hi << 8) | lo)
+            self._gif_file = f
+            self._gif_n_frames = n
+            self._gif_frame_size = w * h // 8
+            self._gif_delays = delays
+            self._gif_cur_frame = 0
+            self._gif_data_offset = f.tell()
+            self._gif_next_ms = 0
+            print("GIF alarm: {} frames geladen uit {}".format(n, path))
+            return True
+        except Exception as e:
+            print("GIF alarm open fout:", e)
+            try:
+                f.close()
+            except Exception:
+                pass
+            self._gif_file = None
+            self._gif_delays = []
+            return False
+
+    def _draw_gif_alarm_frame(self):
+        now = time.ticks_ms()
+        if time.ticks_diff(now, self._gif_next_ms) < 0:
+            return
+        try:
+            self._gif_file.seek(self._gif_data_offset + self._gif_cur_frame * self._gif_frame_size)
+            raw = self._gif_file.read(self._gif_frame_size)
+            if len(raw) == self._gif_frame_size:
+                import framebuf as _fb
+                fb = _fb.FrameBuffer(bytearray(raw), 128, 64, _fb.MONO_VLSB)
+                self.display.fill(0)
+                self.display.blit(fb, 0, 0)
+                self.display.show()
+                delay = self._gif_delays[self._gif_cur_frame]
+                if delay < 20:
+                    delay = 100
+                self._gif_next_ms = time.ticks_add(now, delay)
+                self._gif_cur_frame = (self._gif_cur_frame + 1) % self._gif_n_frames
+        except Exception as e:
+            print("GIF alarm frame fout:", e)
+            try:
+                self._gif_file.close()
+            except Exception:
+                pass
+            self._gif_file = None
+            self._gif_delays = []
+
+    def _draw_alarm_controls_overlay(self, frame):
+        # Toon STOP/SNOOZE hint: 2s aan, 5s uit (7s periode).
+        t_sec = time.ticks_ms() // 1000
+        if t_sec % 7 < 2:
+            self.display.fill_rect(0, 0, 128, 10, 0)
+            self.display.text("^STOP", 0, 1, 1)
+            self.display.text("^SNOOZE", 72, 1, 1)
+
     def _draw_alarm_animation(self, frame):
         elapsed = self._alarm_elapsed_ms()
         tone = getattr(self, 'active_tone', '1')
         intensity = self._alarm_intensity()
+        # GIF-animatie als actieve gif ingesteld is
+        gif_name = getattr(self, 'active_gif', '')
+        if self._gif_file is None and gif_name:
+            self._open_gif_by_name(gif_name)
+        if self._gif_file is not None:
+            self._draw_gif_alarm_frame()
+            boss = self._alarm_boss_level()
+            if boss > 0:
+                if boss >= 2 and (frame % 2 == 0):
+                    self.display.rect(0, 0, 128, 64, 1)
+            self._draw_alarm_controls_overlay(frame)
+            self.display.show()
+            return
         if elapsed < ALARM_INTRO_MS:
             self._draw_alarm_intro(frame, tone)
+            self._draw_alarm_controls_overlay(frame)
+            self.display.show()
             return
         if tone == '1':
             self._draw_zelda_animation(frame)
@@ -2488,24 +3514,230 @@ class App:
         if boss > 0:
             if boss >= 2 and (frame % 2 == 0):
                 self.display.rect(0, 0, 128, 64, 1)
-            if boss >= 3 and (frame % 3 == 0):
-                self.display.fill_rect(0, 0, 128, 8, 1)
-                self.display.text("BOSS MODE", 32, 0, 0)
-            self.display.show()
+        self._draw_alarm_controls_overlay(frame)
+        self.display.show()
 
     def _draw_alarm_edit(self):
         self.display.fill(0)
-        self.display.text("ALARM INSTELLEN", 0, 0, 1)
-        self._draw_big_time(self.alarm_edit_hour, self.alarm_edit_minute, y_offset=14)
+        # Header met acties bovenaan
+        self.display.text("^OPSL", 0, 0, 1)
+        self.display.text("^UUR", (128 - 4 * 8) // 2, 0, 1)
+        self.display.text("^MIN", 128 - 4 * 8, 0, 1)
+        self.display.hline(0, 9, 128, 1)
+        # Knipperen stopt 5s na laatste wijziging van uur/min, daarna weer aan.
+        now = time.ticks_ms()
+        recent_change = self.alarm_edit_last_change_ms and time.ticks_diff(now, self.alarm_edit_last_change_ms) < 5000
+        if recent_change or ((now // 500) % 2 == 0):
+            self._draw_big_time(self.alarm_edit_hour, self.alarm_edit_minute, y_offset=12)
+        # Na korte SET druk 3 seconden hint tonen.
+        if self.alarm_edit_hold_hint_until and time.ticks_diff(self.alarm_edit_hold_hint_until, now) > 0:
+            self.display.text("3 sec indrukken", 2, 56, 1)
+        elif self.alarm_edit_hold_hint_until:
+            self.alarm_edit_hold_hint_until = 0
         self.display.show()
 
     def serve_once(self, c):
-        req = self._request(c)
-        line = req.split("\r\n", 1)[0]
-        parts = line.split(" ")
-        method = parts[0] if len(parts) > 0 else ""
-        path = parts[1] if len(parts) > 1 else ""
+        try:
+            self._serve_request(c)
+        except Exception as e:
+            print("! serve_once fout:", e)
+            try:
+                c.send(("HTTP/1.1 500 Internal Server Error\r\nContent-Type: application/json\r\n\r\n{\"ok\":false,\"error\":\"" + str(e) + "\"}").encode())
+            except Exception:
+                pass
+
+    def _read_request_headers(self, c):
+        """Lees alleen de HTTP-headers (tot \\r\\n\\r\\n). Geef (headers_str, body_start_bytes)."""
+        try:
+            c.settimeout(3)
+        except Exception:
+            pass
+        data = b""
+        while b"\r\n\r\n" not in data and len(data) < 4096:
+            try:
+                ch = c.recv(256)
+            except OSError:
+                break
+            if not ch:
+                break
+            data += ch
+        if b"\r\n\r\n" in data:
+            h, b = data.split(b"\r\n\r\n", 1)
+            return h.decode("utf-8", "ignore"), b
+        return data.decode("utf-8", "ignore"), b""
+
+    def _handle_upload_bin(self, c, headers_raw, body_buf, path):
+        """Stream binaire .bin upload naar alarm_gifs/<naam>.bin"""
+        import uos as _uos
+        # Bestandsnaam uit query string ?name=
+        name = ""
+        if "?" in path:
+            for kv in path.split("?", 1)[1].split("&"):
+                if kv.startswith("name="):
+                    name = kv[5:]
+                    break
+        # Sanitize: alleen alfanumeriek + - _
+        safe = "".join(ch for ch in name if ('a' <= ch <= 'z') or ('A' <= ch <= 'Z') or ('0' <= ch <= '9') or ch in ('-', '_'))[:32]
+        # Strip .bin suffix als al aanwezig
+        if safe.lower().endswith("bin"):
+            safe = safe[:-3].rstrip(".")
+        if not safe:
+            c.send(self._json({"ok": False, "error": "Ongeldige bestandsnaam"}))
+            return
+        # Content-Length ophalen
+        cl = 0
+        for line in headers_raw.split("\r\n"):
+            if line.lower().startswith("content-length:"):
+                try:
+                    cl = int(line.split(":", 1)[1].strip())
+                except Exception:
+                    pass
+        if cl == 0:
+            c.send(self._json({"ok": False, "error": "Geen Content-Length header"}))
+            return
+        if cl > 512 * 1024:
+            c.send(self._json({"ok": False, "error": "Bestand te groot (max 512KB)"}))
+            return
+        # Vrije ruimte controleren
+        try:
+            st = self._get_storage_info()
+            avail = st.get("free_bytes", 0) - 8192
+            if cl > avail:
+                c.send(self._json({"ok": False, "error": "Onvoldoende opslagruimte"}))
+                return
+        except Exception:
+            pass
+        dest = "/{}.bin".format(safe)
+        written = 0
+        try:
+            with open(dest, "wb") as f:
+                if body_buf:
+                    f.write(body_buf)
+                    written += len(body_buf)
+                while written < cl:
+                    try:
+                        chunk = c.recv(min(512, cl - written))
+                    except OSError:
+                        break
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    written += len(chunk)
+        except Exception as _e:
+            try:
+                _uos.remove(dest)
+            except Exception:
+                pass
+            c.send(self._json({"ok": False, "error": str(_e)}))
+            return
+        if written < cl:
+            try:
+                _uos.remove(dest)
+            except Exception:
+                pass
+            c.send(self._json({"ok": False, "error": "Upload onvolledig ({}/{} bytes)".format(written, cl)}))
+            return
+        print("GIF upload opgeslagen:", dest, written, "bytes")
+        c.send(self._json({"ok": True, "name": safe + ".bin", "bytes": written}))
+
+    def _handle_upload_file(self, c, headers_raw, body_buf, path):
+        """Generieke bestandsupload: schrijft elk bestand naar de root van het filesystem."""
+        import uos as _uos
+        # Bestandsnaam uit query string ?filename=
+        filename = ""
+        if "?" in path:
+            for kv in path.split("?", 1)[1].split("&"):
+                if kv.startswith("filename="):
+                    filename = kv[9:]
+                    break
+        # URL-decode %20 etc. (eenvoudig)
+        filename = filename.replace("%20", " ").replace("%2F", "/").replace("%5F", "_")
+        # Toegestane extensies
+        ALLOWED = (".py", ".html", ".json", ".bin", ".mpy", ".txt", ".css", ".js")
+        ok_ext = any(filename.lower().endswith(e) for e in ALLOWED)
+        if not filename or not ok_ext or "/" in filename or ".." in filename:
+            c.send(self._json({"ok": False, "error": "Ongeldige bestandsnaam of extensie"}))
+            return
+        # Content-Length
+        cl = 0
+        for line in headers_raw.split("\r\n"):
+            if line.lower().startswith("content-length:"):
+                try:
+                    cl = int(line.split(":", 1)[1].strip())
+                except Exception:
+                    pass
+        if cl == 0:
+            c.send(self._json({"ok": False, "error": "Geen Content-Length header"}))
+            return
+        if cl > 600 * 1024:
+            c.send(self._json({"ok": False, "error": "Bestand te groot (max 600KB)"}))
+            return
+        dest = "/" + filename
+        written = 0
+        try:
+            with open(dest, "wb") as f:
+                if body_buf:
+                    f.write(body_buf)
+                    written += len(body_buf)
+                while written < cl:
+                    try:
+                        chunk = c.recv(min(512, cl - written))
+                    except OSError:
+                        break
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    written += len(chunk)
+        except Exception as _e:
+            try:
+                _uos.remove(dest)
+            except Exception:
+                pass
+            c.send(self._json({"ok": False, "error": str(_e)}))
+            return
+        if written < cl:
+            try:
+                _uos.remove(dest)
+            except Exception:
+                pass
+            c.send(self._json({"ok": False, "error": "Upload onvolledig ({}/{} bytes)".format(written, cl)}))
+            return
+        print("Bestand upload opgeslagen:", dest, written, "bytes")
+        c.send(self._json({"ok": True, "filename": filename, "bytes": written}))
+
+    def _serve_request(self, c):
+        # Lees eerst alleen de headers, zodat binaire uploads direct gestreamed kunnen worden
+        headers_raw, body_start = self._read_request_headers(c)
+        first_line = headers_raw.split("\r\n", 1)[0] if headers_raw else ""
+        parts_l = first_line.split(" ")
+        method = parts_l[0] if len(parts_l) > 0 else ""
+        path = parts_l[1] if len(parts_l) > 1 else ""
         path_no_query = path.split("?", 1)[0]
+        # Upload endpoints: stream data naar bestand (omzeilt body-buffer limiet)
+        if method == "POST" and path_no_query == "/api/upload-bin":
+            self._handle_upload_bin(c, headers_raw, body_start, path)
+            return
+        if method == "POST" and path_no_query == "/api/upload-file":
+            self._handle_upload_file(c, headers_raw, body_start, path)
+            return
+        # Alle andere endpoints: lees body volledig af (max 8KB)
+        cl = 0
+        for _hline in headers_raw.split("\r\n"):
+            if _hline.lower().startswith("content-length:"):
+                try:
+                    cl = int(_hline.split(":", 1)[1].strip())
+                except Exception:
+                    cl = 0
+        body = body_start
+        while len(body) < cl and (len(headers_raw) + len(body)) < 8192:
+            try:
+                _ch = c.recv(min(512, cl - len(body)))
+            except OSError:
+                break
+            if not _ch:
+                break
+            body += _ch
+        req = headers_raw + "\r\n\r\n" + body.decode("utf-8", "ignore")
         if method == "GET" and path_no_query == "/":
             filename = _HTML_FILE_LITE if LOW_MEMORY_WEB_MODE else _HTML_FILE
             _send_html_response(c, filename)
@@ -2523,8 +3755,19 @@ class App:
                 "alarm_volume": self.volume,
                 "alarm_schedule": self.alarm_schedule,
                 "alarm_combo": self.alarm_combo,
-                "alarm_tones": get_alarm_tone_options()
+                "alarm_tones": get_alarm_tone_options(),
+                "track_labels": self._track_labels,
+                "alarm_gif_combo": self.alarm_gif_combo,
+                "alarm_gifs": self._list_gif_choices(),
+                "storage": self._get_storage_info(),
+                "gif_tone_map": self._merged_gif_tone_map(),
+                "weather_place": self.config.get("weather", "place", "Zevenaar") if self.config else "Zevenaar",
+                "weather_latitude": self.config.get("weather", "latitude", 51.92) if self.config else 51.92,
+                "weather_longitude": self.config.get("weather", "longitude", 6.08) if self.config else 6.08
             }))
+            return
+        if method == "GET" and path == "/api/storage-info":
+            c.send(self._json({"ok": True, "storage": self._get_storage_info()}))
             return
         if method == "POST" and path == "/api/set-time":
             d = self._parse(req)
@@ -2556,21 +3799,86 @@ class App:
                 self.config.set("alarm_sound", "volume", self.volume)
             c.send(self._json({"ok": True}))
             return
+        if method == "POST" and path == "/api/set-weather-location":
+            d = self._parse(req)
+            place = str(d.get("place", "") or "").strip()
+            if not place:
+                c.send(self._json({"ok": False, "error": "Geen plaatsnaam opgegeven"}))
+                return
+            if not self.config:
+                c.send(self._json({"ok": False, "error": "Configuratie niet beschikbaar"}))
+                return
+            try:
+                resolved = self._resolve_weather_location(place)
+                self.config.config.setdefault("weather", {})
+                self.config.config["weather"]["place"] = resolved["place"]
+                self.config.config["weather"]["latitude"] = resolved["latitude"]
+                self.config.config["weather"]["longitude"] = resolved["longitude"]
+                self.config.save()
+                self._weather_temp = None
+                self._weather_code = None
+                self._fetch_weather()
+                self._weather_next_ms = time.ticks_add(time.ticks_ms(), self._weather_interval_ms)
+                c.send(self._json({
+                    "ok": True,
+                    "place": resolved["place"],
+                    "latitude": resolved["latitude"],
+                    "longitude": resolved["longitude"],
+                    "temp": self._weather_temp,
+                    "code": self._weather_code,
+                }))
+            except Exception as _e:
+                c.send(self._json({"ok": False, "error": str(_e)}))
+            return
         if method == "POST" and path == "/api/set-alarm-schedule":
             d = self._parse(req)
             self.alarm_schedule = self._normalize_alarm_schedule(d.get("alarm_schedule", {}))
             self.alarm_combo = self._normalize_alarm_combo(d.get("alarm_combo", self.alarm_combo))
+            self.alarm_gif_combo = self._normalize_alarm_gif_combo(d.get("alarm_gif_combo", self.alarm_gif_combo))
             if self.config:
                 self.config.config["alarm_schedule"] = self.alarm_schedule
                 self.config.config["alarm_combo"] = self.alarm_combo
+                self.config.config["alarm_gif_combo"] = self.alarm_gif_combo
                 self.config.save()
+            if self.eeprom is not None:
+                try:
+                    self.eeprom.save_alarm_schedule(self.alarm_schedule)
+                    print("Alarmschema opgeslagen in EEPROM")
+                except Exception as _e:
+                    print("! EEPROM schrijven mislukt:", _e)
             c.send(self._json({"ok": True}))
+            return
+        if method == "GET" and path == "/api/list-alarm-gifs":
+            c.send(self._json({"ok": True, "gifs": self._list_gif_choices()}))
             return
         if method == "POST" and path == "/api/test-alarm":
             d = self._parse(req)
             sec = int(d.get("seconds", 10) or 10)
             sec = max(1, min(60, sec))
-            self.active_tone = self._tone_now()
+            tone = self._normalize_tone_key(d.get("tone", self._tone_now()))
+            animation = d.get("animation", "")
+            self.active_gif = ""
+            if isinstance(animation, str) and animation.startswith("gif:"):
+                safe = "".join(ch for ch in animation[4:] if ('a' <= ch <= 'z') or ('A' <= ch <= 'Z') or ('0' <= ch <= '9') or ch in ('-', '_'))[:32]
+                self.active_gif = self._pick_alarm_gif(safe if safe else "random")
+                linked = self._get_gif_tone(self.active_gif)
+                if linked is not None:
+                    tone = self._normalize_tone_key(linked)
+            elif isinstance(animation, str) and animation == "random":
+                self.active_gif = self._pick_alarm_gif("random")
+                linked = self._get_gif_tone(self.active_gif)
+                if linked is not None:
+                    tone = self._normalize_tone_key(linked)
+            elif isinstance(animation, str) and animation.startswith("tone:"):
+                tone = self._normalize_tone_key(animation[5:])
+            if self._gif_file is not None:
+                try:
+                    self._gif_file.close()
+                except Exception:
+                    pass
+                self._gif_file = None
+                self._gif_delays = []
+            self.active_tone = tone
             self.alarm_started_ms = time.ticks_ms()
             self.alarm_until = time.ticks_add(time.ticks_ms(), sec * 1000)
             c.send(self._json({"ok": True}))
@@ -2594,11 +3902,102 @@ class App:
             else:
                 c.send(self._json({"ok": False, "error": "transitie al bezig of geen display"}))
             return
+        if method == "GET" and path == "/api/dfplayer-info":
+            count = None
+            if self._ensure_dfplayer_ready():
+                try:
+                    count = self.dfplayer.query_track_count()
+                except Exception:
+                    pass
+            c.send(self._json({"ok": True, "track_count": count}))
+            return
+        if method == "POST" and path == "/api/play-track":
+            d = self._parse(req)
+            track = str(d.get("track", "") or "").strip()
+            if track.isdigit() and 1 <= int(track) <= DFPLAYER_TRACK_COUNT:
+                if self._ensure_dfplayer_ready():
+                    try:
+                        dfvol = max(0, min(30, int(self.volume * 30 // 100)))
+                        self.dfplayer.set_volume(dfvol)
+                        self.dfplayer.play_mp3(int(track))
+                    except Exception as _e:
+                        print("! play-track fout:", _e)
+                c.send(self._json({"ok": True}))
+            else:
+                c.send(self._json({"ok": False, "error": "Ongeldig tracknummer"}))
+            return
+        if method == "POST" and path == "/api/set-track-label":
+            d = self._parse(req)
+            track = str(d.get("track", "") or "").strip()
+            label = str(d.get("label", "") or "").strip()[:40]
+            if not track.isdigit() or not (1 <= int(track) <= DFPLAYER_TRACK_COUNT):
+                c.send(self._json({"ok": False, "error": "Ongeldig tracknummer"}))
+                return
+            if label:
+                self._track_labels[track] = label
+            else:
+                self._track_labels.pop(track, None)
+            self._save_track_labels()
+            c.send(self._json({"ok": True, "track_labels": self._track_labels}))
+            return
+        if method == "POST" and path == "/api/set-gif-tone":
+            d = self._parse(req)
+            gif_name = str(d.get("name", "") or "").strip()
+            tone_key = str(d.get("tone", "") or "").strip()
+            safe = "".join(ch for ch in gif_name if ('a' <= ch <= 'z') or ('A' <= ch <= 'Z') or ('0' <= ch <= '9') or ch in ('-', '_'))[:32]
+            if not safe:
+                c.send(self._json({"ok": False, "error": "Ongeldige animatienaam"}))
+                return
+            if tone_key:
+                self._gif_tone_overrides[safe] = self._normalize_tone_key(tone_key)
+            else:
+                self._gif_tone_overrides.pop(safe, None)
+            self._save_gif_tone_overrides()
+            c.send(self._json({"ok": True, "gif_tone_map": self._merged_gif_tone_map()}))
+            return
+        if method == "POST" and path == "/api/delete-gif":
+            import uos as _uos
+            d = self._parse(req)
+            name = str(d.get("name", "") or "")
+            safe = "".join(ch for ch in name if ('a' <= ch <= 'z') or ('A' <= ch <= 'Z') or ('0' <= ch <= '9') or ch in ('-', '_'))[:32]
+            if safe.lower().endswith("bin"):
+                safe = safe[:-3].rstrip(".")
+            if not safe:
+                c.send(self._json({"ok": False, "error": "Ongeldige naam"}))
+                return
+            try:
+                _uos.remove("/{}.bin".format(safe))
+                if safe in self._gif_tone_overrides:
+                    self._gif_tone_overrides.pop(safe, None)
+                    self._save_gif_tone_overrides()
+                c.send(self._json({"ok": True}))
+            except OSError:
+                c.send(self._json({"ok": False, "error": "Bestand niet gevonden"}))
+            return
+        if method == "POST" and path == "/api/restart":
+            import machine as _machine
+            c.send(self._json({"ok": True, "message": "Herstarten..."}))
+            try:
+                c.close()
+            except Exception:
+                pass
+            import time as _time
+            _time.sleep_ms(300)
+            _machine.reset()
+            return
         c.send("HTTP/1.1 404 Not Found\r\n\r\n".encode())
 
     def run(self):
         print("Hoofdloop gestart")
-        self._play_boot_intro()
+        try:
+            self._play_boot_intro()
+        except Exception as _e:
+            print("! Boot intro fout, ga door:", _e)
+            try:
+                if self.dfplayer:
+                    self.dfplayer.stop()
+            except Exception:
+                pass
 
         frame = 0
         gc_counter = 0
@@ -2622,7 +4021,17 @@ class App:
                     else:
                         self._play(time.ticks_ms())
                 else:
-                    self._check_scheduled_alarm()
+                    if self.snooze_until is not None:
+                        if time.ticks_diff(time.ticks_ms(), self.snooze_until) >= 0:
+                            self.active_tone = self._normalize_tone_key(self.snooze_tone if self.snooze_tone else self._tone_now())
+                            self.active_gif = self.snooze_gif if self.snooze_gif else ""
+                            self.alarm_started_ms = time.ticks_ms()
+                            self.alarm_until = time.ticks_add(time.ticks_ms(), ALARM_AUTO_STOP_MS)
+                            self.snooze_until = None
+                            self.snooze_tone = None
+                            self.snooze_gif = ""
+                    else:
+                        self._check_scheduled_alarm()
 
                 if frame > 0 and frame % 18000 == 0 and self.wifi_ok:
                     self.clock.sync_ntp()
@@ -2651,7 +4060,7 @@ class App:
                     gc_counter = 0
 
                 frame += 1
-                time.sleep(0.05)
+                time.sleep(0.01)
             except Exception as e:
                 print("Loop fout:", e)
                 gc.collect()

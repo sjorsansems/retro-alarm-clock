@@ -125,3 +125,20 @@ class DFPlayer:
         if self._busy is None:
             return False
         return self._busy.value() == 0  # BUSY is actief-laag
+
+    def query_track_count(self):
+        """Vraag het totaal aantal bestanden op de SD-kaart op. Geeft int terug of None bij timeout."""
+        self._drain_uart()
+        self._send(0x48)  # query TF total files
+        deadline = time.ticks_add(time.ticks_ms(), 500)
+        buf = b''
+        while time.ticks_diff(deadline, time.ticks_ms()) > 0:
+            if self._uart.any():
+                buf += self._uart.read()
+                if len(buf) >= 10:
+                    # zoek pakket: 0x7E ... 0xEF
+                    for i in range(len(buf) - 9):
+                        if buf[i] == 0x7E and buf[i+9] == 0xEF:
+                            return (buf[i+5] << 8) | buf[i+6]
+            time.sleep_ms(10)
+        return None

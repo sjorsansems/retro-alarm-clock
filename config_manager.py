@@ -127,6 +127,13 @@ class ConfigManager:
                 "type": "SH1106",
                 "width": 128,
                 "height": 64
+            },
+            "weather": {
+                "enabled": True,
+                "place": "Zevenaar",
+                "latitude": 51.92,
+                "longitude": 6.08,
+                "interval_s": 1800
             }
         }
 

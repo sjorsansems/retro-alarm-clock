@@ -79,9 +79,9 @@ button.ghost{background:#5d7280}
     <h3>Alarm testen</h3>
     <div class="grid">
       <div>
-        <label for="testAnimationInput">Ingebouwde animaties</label>
+        <label for="testAnimationInput">🎵 Liedje + animatie</label>
         <select id="testAnimationInput"></select>
-        <div class="tiny" style="margin-top:6px">Alleen Zelda t/m Arcade voor snelle alarmtest.</div>
+        <div class="tiny" style="margin-top:6px">Kies een liedje: speelt meteen af met bijbehorende animatie en LED-effect</div>
       </div>
       <div>
         <label for="volumeInput">Volume %</label>
@@ -135,10 +135,8 @@ button.ghost{background:#5d7280}
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
       <input type="file" id="gifBinInput" accept=".bin" style="flex:1;min-width:0;font-size:13px">
       <button onclick="uploadGifBin()" id="uploadGifBtn">&#11014; Uploaden</button>
-      <button onclick="refreshGifManagerOnly()" type="button" class="ghost" style="width:auto;padding:8px 12px">Herlaad animaties</button>
     </div>
     <div id="uploadStatus" style="font-size:13px;color:var(--muted);margin-bottom:10px"></div>
-    <div id="gifDebug" style="font-size:12px;color:var(--muted);margin-bottom:8px"></div>
     <div id="gifManagerList"></div>
   </div>
 
@@ -164,27 +162,7 @@ button.ghost{background:#5d7280}
     <h3>Alarm per dag</h3>
     <p style="font-size:13px;color:var(--muted);margin:0 0 10px">Elke liedje-keuze bevat: het MP3-liedje, de animatie op het scherm, en het LED-effect. Alles is gekoppeld!</p>
     <div class="schedule" id="scheduleRoot"></div>
-    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;margin-top:10px">
-      <button onclick="showRandomAnimationsForSchedule()" class="ghost" style="width:auto;padding:6px 12px">Toon random animaties</button>
-      <div id="randomAnimInfo" style="font-size:13px;color:var(--muted)"></div>
-    </div>
     <button style="margin-top:10px" onclick="saveSchedule()">Weekschema opslaan</button>
-  </div>
-
-  <div class="card">
-    <h3>&#128640; Bestanden uploaden (OTA)</h3>
-    <p style="font-size:13px;color:var(--muted);margin:0 0 10px">Upload bijgewerkte bestanden draadloos naar de klok. Na het uploaden van firmware of HTML kun je de klok herstarten.</p>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
-      <input type="file" id="otaFileInput" style="width:auto;font-size:13px">
-      <button id="otaUploadBtn" onclick="otaUpload()" style="width:auto;padding:5px 14px">&#11014; Uploaden</button>
-      <button id="otaRestartBtn" onclick="otaRestart()" style="width:auto;padding:5px 14px;background:#cc4400">&#x1F501; Herstarten</button>
-    </div>
-    <div id="otaProgressWrap" style="display:none;margin-bottom:8px">
-      <div style="height:8px;background:var(--line);border-radius:4px;overflow:hidden">
-        <div id="otaProgressBar" style="height:100%;width:0%;background:var(--accent);transition:width .2s"></div>
-      </div>
-    </div>
-    <div id="otaStatus" style="font-size:13px;color:var(--muted)"></div>
   </div>
 </div>
 
@@ -195,16 +173,7 @@ let tonesSignature=''
 let toneMap={}
 let availableGifs=[]
 let gifToneMap={}
-let gifLedMap={}
 let trackLabels={}
-let gifRefreshBusy=false
-
-function setGifDebug(msg,isError){
-  const box=document.getElementById('gifDebug')
-  if(!box)return
-  box.textContent=msg||''
-  box.style.color=isError?'#c00':'var(--muted)'
-}
 
 function fmtBytes(n){
   const v=Number(n||0)
@@ -235,105 +204,16 @@ function bindEditor(id){const el=document.getElementById(id);if(!el)return;['foc
 async function apiPost(url,payload){const res=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload||{})});return res.json().catch(()=>({ok:false}))}
 function updateToneScheme(){const sel=document.getElementById('testAnimationInput');const box=document.getElementById('toneScheme');if(!sel||!box)return;const choice=parseAnimationValue(sel.value);let tone=choice.tone;if(!tone&&choice.gif&&gifToneMap[choice.gif])tone=gifToneMap[choice.gif];const t=toneMap[tone];if(!t){box.textContent='LED-effect: onbekend';return}box.textContent=`LED-effect (${t.label}): ${t.scheme||'onbekend'}`}
 
-const BUILTIN_GIFS=['mario','zelda','doom','fire','heartbeat','matrix','pacman','pong','radar','skull','snake','space','ufo','donkey','knight_rider']
-const BUILTIN_TEST_TONE_MAX=9
+const BUILTIN_GIFS=['mario','zelda','doom','fire','heartbeat','matrix','pacman','pong','radar','skull','snake','space','ufo','donkey']
 function trackLabel(key){return trackLabels[String(key)]||null}
 function toneOptionLabel(t){
-  if(t&&t.label)return t.label
   const custom=trackLabel(t.key)
-  return custom||`Lied ${t.key}`
-}
-function toneTrackLabel(t){
-  const custom=trackLabel(t.key)
-  return custom||toneOptionLabel(t)
+  return custom?`${t.label} (${custom})`:t.label
 }
 function buildAnimationOptions(toneOptions){
-  const builtins=(toneOptions||[])
-    .map(t=>`<option value="tone:${t.key}">${toneOptionLabel(t)}</option>`)
-    .join('')
-  const gifs=availableGifs.map(g=>`<option value="gif:${g}">${g==='random'?'random (animatie)':g+' (gif)'}</option>`).join('')
+  const builtins=(toneOptions||[]).map(t=>`<option value="tone:${t.key}">${toneOptionLabel(t)}</option>`).join('')
+  const gifs=availableGifs.map(g=>`<option value="gif:${g}">${g==='random'?'willekeurig (animatie)':g+' (gif)'}</option>`).join('')
   return builtins+gifs
-}
-
-function buildScheduleAnimationOptions(toneOptions){
-  const namedOnly=(toneOptions||[])
-    .filter(t=>!toneOptionLabel(t).toUpperCase().startsWith('LIED '))
-  const builtins=namedOnly
-    .map(t=>`<option value="tone:${t.key}">${toneOptionLabel(t)}</option>`)
-    .join('')
-  const gifs=availableGifs.map(g=>`<option value="gif:${g}">${g==='random'?'random (animatie)':g+' (gif)'}</option>`).join('')
-  return builtins+gifs
-}
-
-function buildTestAnimationOptions(toneOptions){
-  return (toneOptions||[])
-    .filter(t=>Number(t.key)>=1&&Number(t.key)<=BUILTIN_TEST_TONE_MAX)
-    .map(t=>`<option value="tone:${t.key}">${toneOptionLabel(t)}</option>`)
-    .join('')
-}
-
-function uiToneToInternalTone(uiTone){
-  const n=Number(uiTone)
-  if(!Number.isFinite(n))return '1'
-  return String(Math.max(1,n-1))
-}
-
-function internalToneToUiTone(internalTone){
-  const n=Number(internalTone)
-  if(!Number.isFinite(n))return '2'
-  return String(Math.max(2,n+1))
-}
-
-function gifSafeId(name){
-  return String(name||'').replace(/[^a-zA-Z0-9_-]/g,'_')
-}
-
-function jsQuote(s){
-  return String(s||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'")
-}
-
-function normalizeGifList(raw){
-  const src=Array.isArray(raw)?raw:[]
-  const out=[]
-  const seen={}
-  src.forEach(v=>{
-    let n=String(v||'').trim()
-    if(!n)return
-    if(n.toLowerCase().endsWith('.bin'))n=n.slice(0,-4)
-    if(!seen[n]){seen[n]=1;out.push(n)}
-  })
-  if(!seen.random)out.unshift('random')
-  return out
-}
-
-async function loadAlarmGifs(data){
-  let gifs=normalizeGifList(data&&data.alarm_gifs)
-  if(gifs.length<=1){
-    try{
-      const resp=await fetch('/api/list-alarm-gifs')
-      const body=await resp.json()
-      gifs=normalizeGifList(body&&body.gifs)
-    }catch(e){}
-  }
-  return gifs
-}
-
-async function refreshGifManagerOnly(){
-  if(gifRefreshBusy)return
-  gifRefreshBusy=true
-  try{
-    const resp=await fetch('/api/list-alarm-gifs')
-    const body=await resp.json()
-    availableGifs=normalizeGifList(body&&body.gifs)
-    renderGifManager(availableGifs)
-    const count=Math.max(0,(availableGifs||[]).filter(g=>g!=='random').length)
-    setGifDebug(`Animaties geladen: ${count}`)
-  }catch(e){
-    const msg=(e&&e.message)?e.message:String(e)
-    setGifDebug('Animatie-refresh fout: '+msg,true)
-  }finally{
-    gifRefreshBusy=false
-  }
 }
 
 function animationValueFromState(tone,gif){
@@ -364,18 +244,17 @@ function renderTestAnimations(toneOptions){
   const select=document.getElementById('testAnimationInput')
   if(!select)return
   const current=select.value
-  select.innerHTML=buildTestAnimationOptions(toneOptions)
+  select.innerHTML=buildAnimationOptions(toneOptions)
   if(current && select.querySelector(`option[value="${current}"]`)){
     select.value=current
   }else{
-    select.value='tone:1'
+    select.value=animationValueFromState(document.getElementById('toneInput')?.value||'1','')
   }
-  updateToneScheme()
 }
 
 function renderSchedule(schedule, toneOptions, alarmCombo, alarmGifCombo){
   const root=document.getElementById('scheduleRoot')
-  const animationOptionsHtml=buildScheduleAnimationOptions(toneOptions)
+  const animationOptionsHtml=buildAnimationOptions(toneOptions)
   root.innerHTML=days.map(([key,label])=>{const row=schedule[key]||{enabled:false,hour:7,minute:0};return `<div class="day"><div>${label}</div><label><input id="enabled-${key}" type="checkbox" ${row.enabled?'checked':''}> actief</label><input id="time-${key}" type="time" value="${z(row.hour)}:${z(row.minute)}"><select id="anim-${key}" title="Animatie">${animationOptionsHtml}</select></div>`}).join('')
   days.forEach(([key])=>{
     bindEditor(`enabled-${key}`);bindEditor(`time-${key}`);bindEditor(`anim-${key}`)
@@ -398,34 +277,25 @@ async function refresh(){
     document.getElementById('currentDate').textContent=`${data.weekday_name} ${z(data.day)}-${z(data.month)}-${data.year} (${data.timezone_label})`
     if(data.alarm_gifs)availableGifs=data.alarm_gifs
     if(data.gif_tone_map)gifToneMap=data.gif_tone_map
-    if(data.gif_led_map)gifLedMap=data.gif_led_map
     if(data.track_labels)trackLabels=data.track_labels
     if(data.storage)renderStorage(data.storage)
     renderTestAnimations(data.alarm_tones||[])
     if(data.alarm_tones)cachedAlarmTones=data.alarm_tones
-    
-    // Zet toneMap EERST
-    const newSignature=JSON.stringify(data.alarm_tones||[])
-    if(newSignature!==tonesSignature){
-      tonesSignature=newSignature
-      toneMap={}
-      ;(data.alarm_tones||[]).forEach(t=>toneMap[t.key]=t)
-    }
-    
-    // Animatielijst niet op elke refresh opnieuw ophalen (spaart ESP-webserver)
-    if((availableGifs||[]).length>0){
-      renderGifManager(availableGifs)
-      const count=Math.max(0,(availableGifs||[]).filter(g=>g!=='random').length)
-      setGifDebug(`Animaties geladen: ${count}`)
-    }else{
-      refreshGifManagerOnly()
-    }
-    
+    if(!isEditing()){
+      renderGifManager(data.alarm_gifs||[])
       renderTrackLabels(data.alarm_tones||[])
+    }
+
     if(!isEditing()){
       document.getElementById('timeInput').value=`${z(data.hour)}:${z(data.minute)}`
       document.getElementById('secInput').value=data.second
       document.getElementById('timezoneInput').value=data.timezone_name||'Europe/Amsterdam'
+      const newSignature=JSON.stringify(data.alarm_tones||[])
+      if(newSignature!==tonesSignature){
+        tonesSignature=newSignature
+        toneMap={}
+        ;(data.alarm_tones||[]).forEach(t=>toneMap[t.key]=t)
+      }
       updateToneScheme()
       document.getElementById('volumeInput').value=data.alarm_volume??70
       document.getElementById('weatherPlaceInput').value=data.weather_place||''
@@ -435,8 +305,6 @@ async function refresh(){
     setStatus('Verbonden en bijgewerkt',false)
   }catch(err){
     setStatus('Fout bij ophalen status',true)
-    const msg=(err&&err.message)?err.message:String(err)
-    setGifDebug('Refresh fout: '+msg,true)
   }
 }
 
@@ -539,127 +407,43 @@ async function testTransition(id){
 function renderGifManager(gifs){
   const list=document.getElementById('gifManagerList')
   if(!list)return
-  
-  const files=normalizeGifList(gifs).filter(g=>g!=='random')
+  const files=(gifs||[]).filter(g=>g!=='random')
   if(!files.length){
     list.innerHTML='<div style="font-size:13px;color:var(--muted)">Geen .bin animaties gevonden op de klok.</div>'
     return
   }
-  
-  let html='<div style="font-size:12px;color:var(--muted);margin-bottom:6px">Stel per animatie muziek en LED-thema apart in:</div>'
-  html+='<div style="display:grid;grid-template-columns:auto minmax(120px,1fr) auto auto minmax(100px,1fr) minmax(100px,1fr) auto auto;gap:4px;align-items:center;padding:4px 0 8px;border-bottom:1px solid var(--line);font-size:12px;font-weight:bold;color:var(--muted)"><div style="width:20px">Status</div><div>Titel</div><div>Play</div><div>Stop</div><div>Muziek</div><div>LED</div><div>Save</div><div>Del</div></div>'
-  
+  const toneOptions=Object.entries(toneMap).map(([k,v])=>`<option value="${k}">${k}. ${toneOptionLabel(v)}</option>`).join('')
+  list.innerHTML='<div style="font-size:12px;color:var(--muted);margin-bottom:6px">Animaties en gekoppeld MP3 tracknummer:</div>'+
+    files.map(g=>{
+      const isBuiltin=BUILTIN_GIFS.includes(g)
+      const selId=`gifToneSel_${g}`
+      const selOpts=`<option value="">-- geen koppeling --</option>${toneOptions}`
+      return `<div style="border-bottom:1px solid #333;padding:6px 0">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+          <span style="font-size:13px;font-weight:bold">${g}.bin${isBuiltin?' <span style="font-size:10px;color:var(--muted)">(ingebouwd)</span>':''}</span>
+          <div style="display:flex;gap:4px;align-items:center">
+            <select id="${selId}" style="width:auto;font-size:12px;padding:2px 4px" onchange="markEditing()" onfocus="markEditing()">${selOpts}</select>
+            <button onclick="saveGifTone('${g}')" style="width:auto;padding:3px 8px;font-size:12px" title="Opslaan">&#x1F4BE;</button>
+            <button onclick="deleteGifBin('${g}')" style="width:auto;background:#8f2929;padding:3px 10px;font-size:12px">&#x1F5D1;</button>
+          </div>
+        </div>
+      </div>`
+    }).join('')
   files.forEach(g=>{
-    const isMapped=Object.prototype.hasOwnProperty.call(gifToneMap||{},g)
-    const statusIcon=isMapped?'✓':'✗'
-    const statusColor=isMapped?'#228822':'#c00'
-    const safeName=jsQuote(g)
-    const selId=`gifToneSel_${gifSafeId(g)}`
-    const ledSelId=`gifLedSel_${gifSafeId(g)}`
-    
-    let toneOpts='<option value="">--</option>'
-    if(toneMap && Object.keys(toneMap).length > 0){
-      Object.entries(toneMap).forEach(([k,v])=>{
-        const uiTrack=Number(k)+1
-        const label=v?.label||`Lied ${k}`
-        toneOpts+=`<option value="${uiTrack}">${uiTrack}. ${label}</option>`
-      })
-    }
-    
-    html+=`<div style="display:grid;grid-template-columns:auto minmax(120px,1fr) auto auto minmax(100px,1fr) minmax(100px,1fr) auto auto;gap:4px;align-items:center;padding:4px 0;border-bottom:1px solid #eee">
-      <div style="width:20px;text-align:center;color:${statusColor};font-weight:bold">${statusIcon}</div>
-      <div style="font-size:12px;font-weight:bold">${g}.bin</div>
-      <button onclick="previewGif('${safeName}')" style="padding:2px 6px;font-size:11px;background:#228822">▶</button>
-      <button onclick="stopAudio()" style="padding:2px 6px;font-size:11px;background:#666">⏹</button>
-      <select id="${selId}" style="width:100%;font-size:11px;padding:2px" onchange="markEditing()" onfocus="markEditing()">${toneOpts}</select>
-      <select id="${ledSelId}" style="width:100%;font-size:11px;padding:2px" onchange="markEditing()" onfocus="markEditing()">${toneOpts}</select>
-      <button onclick="saveGifTone('${safeName}')" style="padding:2px 6px;font-size:11px">💾</button>
-      <button onclick="deleteGifBin('${safeName}')" style="padding:2px 6px;font-size:11px;background:#c00">🗑</button>
-    </div>`
+    const sel=document.getElementById('gifToneSel_'+g)
+    if(sel&&gifToneMap[g])sel.value=gifToneMap[g]
   })
-  
-  list.innerHTML=html
-  
-  // Set values from maps
-  files.forEach(g=>{
-    const sel=document.getElementById('gifToneSel_'+gifSafeId(g))
-    const ledSel=document.getElementById('gifLedSel_'+gifSafeId(g))
-    if(sel&&gifToneMap&&gifToneMap[g])sel.value=internalToneToUiTone(gifToneMap[g])
-    if(ledSel&&gifLedMap&&gifLedMap[g])ledSel.value=internalToneToUiTone(gifLedMap[g])
-  })
-}
-
-function showRandomAnimations(){
-  const files=(availableGifs||[]).filter(g=>g!=='random')
-  const info=document.getElementById('randomAnimInfo')
-  if(!files.length){
-    if(info)info.textContent='Geen animaties in random'
-    alert('Geen animaties gevonden voor random.')
-    return
-  }
-  const text=`Random gebruikt nu (${files.length}):\n- ${files.join('\n- ')}`
-  if(info)info.textContent=`Random: ${files.join(', ')}`
-  alert(text)
-}
-async function showRandomAnimationsForSchedule(){
-  // Ingebouwde tones 1-9 (die hebben allemaal muziek)
-  const builtins=[]
-  for(let i=1;i<=9;i++){
-    const key=String(i)
-    if(toneMap[key]){
-      const label=toneMap[key].label||`Tone ${i}`
-      builtins.push(label)
-    }
-  }
-  
-  // .bin files MET muziekkoppeling (backend filtert al!)
-  const resp=await fetch('/api/list-random-gifs')
-  const data=await resp.json()
-  const mappedBins=(data.gifs||[]).filter(g=>g!=='random')
-  
-  const all=[...builtins,...mappedBins]
-  const info=document.getElementById('randomAnimInfo')
-  if(!all.length){
-    if(info)info.textContent='Geen animaties in random'
-    alert('Geen animaties in random pool.')
-    return
-  }
-  const text=`Random pool (${all.length}):\n- ${all.join('\n- ')}`
-  if(info)info.textContent=`Random: ${all.join(', ')}`
-  alert(text)
 }
 async function saveGifTone(name){
-  const sel=document.getElementById('gifToneSel_'+gifSafeId(name))
-  const ledSel=document.getElementById('gifLedSel_'+gifSafeId(name))
-  if(!sel||!ledSel)return
-  const musicTone=sel.value?uiToneToInternalTone(sel.value):null
-  const ledTone=ledSel.value?uiToneToInternalTone(ledSel.value):null
-  const out=await apiPost('/api/set-gif-tone',{name,music_tone:musicTone,led_tone:ledTone})
+  const sel=document.getElementById('gifToneSel_'+name)
+  if(!sel)return
+  const tone=sel.value||null
+  const out=await apiPost('/api/set-gif-tone',{name,tone})
   if(out.ok){
     if(out.gif_tone_map)gifToneMap=out.gif_tone_map
-    if(out.gif_led_map)gifLedMap=out.gif_led_map
-    const row=sel.parentElement
-    const btn=row?row.querySelector('button[title="Opslaan"]'):null
+    const btn=sel.nextElementSibling
     if(btn){const orig=btn.innerHTML;btn.innerHTML='✓';setTimeout(()=>{btn.innerHTML=orig},1000)}
-    renderGifManager(availableGifs)
   }
-}
-
-async function previewGif(name){
-  const sel=document.getElementById('gifToneSel_'+gifSafeId(name))
-  const ledSel=document.getElementById('gifLedSel_'+gifSafeId(name))
-  let tone=sel&&sel.value?uiToneToInternalTone(sel.value):(gifToneMap[name]||'1')
-  let ledTone=ledSel&&ledSel.value?uiToneToInternalTone(ledSel.value):(gifLedMap[name]||tone)
-  if(!tone)tone='1'
-  if(!ledTone)ledTone=tone
-  const seconds=Number(document.getElementById('testSecondsInput')?.value||10)
-  const out=await apiPost('/api/test-alarm',{
-    seconds,
-    tone:String(tone),
-    led_tone:String(ledTone),
-    animation:'gif:'+name
-  })
-  setStatus(out.ok?`Animatie test gestart: ${name}`:`Animatie test mislukt: ${name}`,!out.ok)
 }
 
 async function uploadGifBin(){
@@ -679,7 +463,6 @@ async function uploadGifBin(){
     if(out.ok){
       status.textContent='✓ Opgeslagen als '+out.name+' ('+fmtBytes(out.bytes)+')'
       input.value=''
-      refreshGifManagerOnly()
       refresh()
     } else {
       status.textContent='✗ Fout: '+(out.error||'onbekend')
@@ -697,7 +480,6 @@ async function deleteGifBin(name){
   const out=await apiPost('/api/delete-gif',{name})
   if(out.ok){
     status.textContent='✓ '+name+'.bin verwijderd'
-    refreshGifManagerOnly()
     refresh()
   } else {
     status.textContent='✗ Fout: '+(out.error||'onbekend')
@@ -729,8 +511,6 @@ function renderTrackLabels(tones){
         onfocus="markEditing()" oninput="markEditing()">
       <button onclick="playTrack('${key}')" title="Afspelen"
         style="width:auto;padding:4px 9px;font-size:14px;background:#228822;flex-shrink:0">&#x25B6;</button>
-      <button onclick="stopAudio()" title="Stop"
-        style="width:auto;padding:4px 9px;font-size:14px;background:#666;flex-shrink:0">&#x23F9;</button>
       <button onclick="saveTrackLabel('${key}')" title="Opslaan"
         style="width:auto;padding:4px 8px;font-size:13px;flex-shrink:0">&#x1F4BE;</button>
     </div>`)
@@ -756,10 +536,6 @@ async function playTrack(track){
   const out=await apiPost('/api/play-track',{track:String(track)})
   if(!out.ok)alert('Afspelen mislukt: '+(out.error||'onbekend'))
 }
-async function stopAudio(){
-  const out=await apiPost('/api/stop-audio',{})
-  setStatus(out.ok?'Afspelen gestopt':'Stoppen mislukt',!out.ok)
-}
 async function saveTrackLabel(track){
   const inp=document.getElementById('tlbl_'+track)
   if(!inp)return
@@ -777,53 +553,8 @@ async function saveTrackLabel(track){
 ['timeInput','secInput','timezoneInput','testAnimationInput','volumeInput','testSecondsInput','weatherPlaceInput'].forEach(bindEditor)
 document.getElementById('testAnimationInput').addEventListener('change',updateToneScheme)
 refresh()
-refreshGifManagerOnly()
 detectTracks()
-setInterval(()=>{if(!isEditing())refresh()},5000)
-
-async function otaUpload(){
-  const inp=document.getElementById('otaFileInput')
-  const file=inp.files[0]
-  if(!file){otaStatus('Kies eerst een bestand.');return}
-  const btn=document.getElementById('otaUploadBtn')
-  const bar=document.getElementById('otaProgressBar')
-  const wrap=document.getElementById('otaProgressWrap')
-  btn.disabled=true
-  wrap.style.display='block'
-  bar.style.width='0%'
-  otaStatus('Bezig met uploaden: '+file.name+' ('+fmtBytes(file.size)+')')
-  try{
-    const buf=await file.arrayBuffer()
-    const xhr=new XMLHttpRequest()
-    xhr.open('POST','/api/upload-file?filename='+encodeURIComponent(file.name))
-    xhr.setRequestHeader('Content-Type','application/octet-stream')
-    xhr.upload.onprogress=e=>{if(e.lengthComputable)bar.style.width=Math.round(e.loaded/e.total*100)+'%'}
-    xhr.onload=()=>{
-      bar.style.width='100%'
-      let r={}
-      try{r=JSON.parse(xhr.responseText)}catch(e){}
-      if(r.ok)otaStatus('\u2713 '+file.name+' opgeslagen ('+fmtBytes(r.bytes||file.size)+'). Herstart om te activeren.')
-      else otaStatus('\u26A0 Fout: '+(r.error||xhr.status))
-      btn.disabled=false
-    }
-    xhr.onerror=()=>{otaStatus('\u26A0 Verbindingsfout');btn.disabled=false}
-    xhr.send(buf)
-  }catch(e){otaStatus('\u26A0 '+e);btn.disabled=false}
-}
-
-async function otaRestart(){
-  if(!confirm('Klok nu herstarten?'))return
-  const btn=document.getElementById('otaRestartBtn')
-  btn.disabled=true
-  otaStatus('Herstarten...')
-  try{
-    await fetch('/api/restart',{method:'POST'})
-  }catch(e){/* verwacht: verbinding verbreekt bij reset */}
-  otaStatus('\u2713 Herstart gestuurd. Even wachten...')
-  setTimeout(()=>{btn.disabled=false;otaStatus('Klaar. Herlaad de pagina als de klok terug online is.')},5000)
-}
-
-function otaStatus(msg){document.getElementById('otaStatus').textContent=msg}
+setInterval(()=>{if(!isEditing())refresh()},1500)
 </script>
 </body>
 </html>
