@@ -238,13 +238,20 @@ function updateToneScheme(){const sel=document.getElementById('testAnimationInpu
 const BUILTIN_GIFS=['mario','zelda','doom','fire','heartbeat','matrix','pacman','pong','radar','skull','snake','space','ufo','donkey','knight_rider']
 const BUILTIN_TEST_TONE_MAX=9
 function trackLabel(key){return trackLabels[String(key)]||null}
+function toneKeyToUiTrack(key){
+  const n=Number(key)
+  if(!Number.isFinite(n))return 1
+  return Math.max(1,n+1)
+}
 function toneOptionLabel(t){
-  if(t&&t.label)return t.label
-  const custom=trackLabel(t.key)
-  return custom||`Lied ${t.key}`
+  const uiTrack=toneKeyToUiTrack(t&&t.key)
+  const custom=trackLabel(uiTrack)||trackLabel(t&&t.key)
+  if(custom)return custom
+  return `Track ${uiTrack}`
 }
 function toneTrackLabel(t){
-  const custom=trackLabel(t.key)
+  const uiTrack=toneKeyToUiTrack(t&&t.key)
+  const custom=trackLabel(uiTrack)||trackLabel(t&&t.key)
   return custom||toneOptionLabel(t)
 }
 function buildAnimationOptions(toneOptions){
@@ -557,12 +564,15 @@ function renderGifManager(gifs){
     const selId=`gifToneSel_${gifSafeId(g)}`
     const ledSelId=`gifLedSel_${gifSafeId(g)}`
     
-    let toneOpts='<option value="">--</option>'
+    let musicOpts='<option value="">--</option>'
+    let ledOpts='<option value="">--</option>'
     if(toneMap && Object.keys(toneMap).length > 0){
       Object.entries(toneMap).forEach(([k,v])=>{
         const uiTrack=Number(k)+1
-        const label=v?.label||`Lied ${k}`
-        toneOpts+=`<option value="${uiTrack}">${uiTrack}. ${label}</option>`
+        const musicLabel=trackLabel(uiTrack)||`Track ${uiTrack}`
+        const ledLabel=v?.label||`Theme ${k}`
+        musicOpts+=`<option value="${uiTrack}">${uiTrack}. ${musicLabel}</option>`
+        ledOpts+=`<option value="${k}">${k}. ${ledLabel}</option>`
       })
     }
     
@@ -571,8 +581,8 @@ function renderGifManager(gifs){
       <div style="font-size:12px;font-weight:bold">${g}.bin</div>
       <button onclick="previewGif('${safeName}')" style="padding:2px 6px;font-size:11px;background:#228822">▶</button>
       <button onclick="stopAudio()" style="padding:2px 6px;font-size:11px;background:#666">⏹</button>
-      <select id="${selId}" style="width:100%;font-size:11px;padding:2px" onchange="markEditing()" onfocus="markEditing()">${toneOpts}</select>
-      <select id="${ledSelId}" style="width:100%;font-size:11px;padding:2px" onchange="markEditing()" onfocus="markEditing()">${toneOpts}</select>
+      <select id="${selId}" style="width:100%;font-size:11px;padding:2px" onchange="markEditing()" onfocus="markEditing()">${musicOpts}</select>
+      <select id="${ledSelId}" style="width:100%;font-size:11px;padding:2px" onchange="markEditing()" onfocus="markEditing()">${ledOpts}</select>
       <button onclick="saveGifTone('${safeName}')" style="padding:2px 6px;font-size:11px">💾</button>
       <button onclick="deleteGifBin('${safeName}')" style="padding:2px 6px;font-size:11px;background:#c00">🗑</button>
     </div>`
@@ -585,7 +595,7 @@ function renderGifManager(gifs){
     const sel=document.getElementById('gifToneSel_'+gifSafeId(g))
     const ledSel=document.getElementById('gifLedSel_'+gifSafeId(g))
     if(sel&&gifToneMap&&gifToneMap[g])sel.value=internalToneToUiTone(gifToneMap[g])
-    if(ledSel&&gifLedMap&&gifLedMap[g])ledSel.value=internalToneToUiTone(gifLedMap[g])
+    if(ledSel&&gifLedMap&&gifLedMap[g])ledSel.value=String(gifLedMap[g])
   })
 }
 
@@ -633,7 +643,7 @@ async function saveGifTone(name){
   const ledSel=document.getElementById('gifLedSel_'+gifSafeId(name))
   if(!sel||!ledSel)return
   const musicTone=sel.value?uiToneToInternalTone(sel.value):null
-  const ledTone=ledSel.value?uiToneToInternalTone(ledSel.value):null
+  const ledTone=ledSel.value?String(ledSel.value):null
   const out=await apiPost('/api/set-gif-tone',{name,music_tone:musicTone,led_tone:ledTone})
   if(out.ok){
     if(out.gif_tone_map)gifToneMap=out.gif_tone_map
@@ -649,7 +659,7 @@ async function previewGif(name){
   const sel=document.getElementById('gifToneSel_'+gifSafeId(name))
   const ledSel=document.getElementById('gifLedSel_'+gifSafeId(name))
   let tone=sel&&sel.value?uiToneToInternalTone(sel.value):(gifToneMap[name]||'1')
-  let ledTone=ledSel&&ledSel.value?uiToneToInternalTone(ledSel.value):(gifLedMap[name]||tone)
+  let ledTone=ledSel&&ledSel.value?String(ledSel.value):(gifLedMap[name]||tone)
   if(!tone)tone='1'
   if(!ledTone)ledTone=tone
   const seconds=Number(document.getElementById('testSecondsInput')?.value||10)
