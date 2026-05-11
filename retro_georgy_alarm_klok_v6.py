@@ -231,8 +231,25 @@ class SH1106_I2C(framebuf.FrameBuffer):
                     0xAD, 0x8B, 0xA1, 0xC8, 0xDA, 0x12, 0x81, 0x7F, 0xD9, 0x22,
                     0xDB, 0x35, 0xA4, 0xA6, 0xAF):
             self.i2c.writeto(self.addr, bytes((0x80, cmd)))
+        self._contrast = 0x7F
+        self._display_on = True
         self.fill(0)
         self.show()
+
+    def set_contrast(self, value):
+        value = max(0, min(255, int(value)))
+        if value == self._contrast:
+            return
+        self.i2c.writeto(self.addr, bytes((0x80, 0x81)))
+        self.i2c.writeto(self.addr, bytes((0x80, value)))
+        self._contrast = value
+
+    def display_on(self, enabled=True):
+        enabled = bool(enabled)
+        if enabled == self._display_on:
+            return
+        self.i2c.writeto(self.addr, bytes((0x80, 0xAF if enabled else 0xAE)))
+        self._display_on = enabled
 
     def show(self):
         for page in range(self.pages):
@@ -579,7 +596,7 @@ class App:
         self.next_daily_check_ms = time.ticks_add(time.ticks_ms(), WIFI_DAILY_CHECK_MS)
         self.next_daily_sync_attempt_ms = time.ticks_ms()
         self._display_dim_state = None
-        self._display_manual_mode = 0  # 0=normaal, 1=dim, 2=rand
+        self._display_manual_mode = 0  # 0=normaal, 1=dim, 2=rand, 3=extra dim
         self._weather_phase = 0
         self._rtc_temp = None
         self._rtc_temp_next_ms = 0
@@ -1459,8 +1476,8 @@ class App:
             self._snooze_alarm(10)
             return
         if not self.alarm_edit_mode:
-            self._display_manual_mode = (self._display_manual_mode + 1) % 3
-            labels = ("OLED: NORMAAL", "OLED: DIM", "OLED: RAND")
+            self._display_manual_mode = (self._display_manual_mode + 1) % 4
+            labels = ("OLED: NORMAAL", "OLED: DIM", "OLED: RAND", "OLED: EXTRA DIM")
             self._set_feedback(labels[self._display_manual_mode], ms=1200)
             self._apply_display_brightness(force=True)
             return
@@ -1755,7 +1772,7 @@ class App:
                 if bits & (0x80 >> col):
                     self.display.pixel(x + col, y + row, 1)
 
-    def _draw_big_char(self, ch, x, y, scale=3, dim_mode=False, rand_mode=False):
+    def _draw_big_char(self, ch, x, y, scale=3, dim_mode=False, rand_mode=False, extra_dim_mode=False):
         glyph = BIG_TIME_GLYPHS.get(ch)
         if not glyph:
             return 0
@@ -1781,22 +1798,24 @@ class App:
                         self.display.vline(px, py, scale, 1)
                     if not _is_on(row_idx, col_idx + 1):
                         self.display.vline(px + scale - 1, py, scale, 1)
-        elif dim_mode:
-            # DIM mode: kleinere gevulde kern per cel (minder licht, rustiger)
-            inner = scale - 2 if scale > 2 else 1
-            offs = (scale - inner) // 2
+        elif extra_dim_mode:
+            # EXTRA DIM: alleen contour, maar met lage display-contrastinstelling.
             for row_idx, row in enumerate(glyph):
                 for col_idx, bit in enumerate(row):
-                    if bit == "1":
-                        self.display.fill_rect(
-                            x + col_idx * scale + offs,
-                            y + row_idx * scale + offs,
-                            inner,
-                            inner,
-                            1,
-                        )
+                    if bit != "1":
+                        continue
+                    px = x + col_idx * scale
+                    py = y + row_idx * scale
+                    if not _is_on(row_idx - 1, col_idx):
+                        self.display.hline(px, py, scale, 1)
+                    if not _is_on(row_idx + 1, col_idx):
+                        self.display.hline(px, py + scale - 1, scale, 1)
+                    if not _is_on(row_idx, col_idx - 1):
+                        self.display.vline(px, py, scale, 1)
+                    if not _is_on(row_idx, col_idx + 1):
+                        self.display.vline(px + scale - 1, py, scale, 1)
         else:
-            # Normaal: volledig gevuld
+            # Normaal: volledig gevuld.
             for row_idx, row in enumerate(glyph):
                 for col_idx, bit in enumerate(row):
                     if bit == "1":
@@ -1826,8 +1845,9 @@ class App:
         
         dim_mode = (self._display_manual_mode == 1)
         rand_mode = (self._display_manual_mode == 2)
+        extra_dim_mode = (self._display_manual_mode == 3)
         for ch in text:
-            x += self._draw_big_char(ch, x, y, scale, dim_mode=dim_mode, rand_mode=rand_mode)
+            x += self._draw_big_char(ch, x, y, scale, dim_mode=dim_mode, rand_mode=rand_mode, extra_dim_mode=extra_dim_mode)
 
     def _play_boot_intro(self):
         """8-bit retro boot intro: RETRO slaat neer van boven, GEORGY van onder.
@@ -2535,10 +2555,29 @@ class App:
         self.display.text(self._easter_message[:18], 4, 1, 0)
 
     def _apply_display_brightness(self, force=False):
-        # Softwarematig dimmen via _draw_big_char checkerboard.
-        # Geen hardware contrast commands meer.
         if not self.display:
             return
+        if self._display_manual_mode == 3:
+            target = 0x08
+        elif self._display_manual_mode == 2:
+            target = 0x04
+        elif self._display_manual_mode == 1:
+            target = 0x01
+        else:
+            target = 0x7F
+        if force or self._display_dim_state != target:
+            try:
+                if hasattr(self.display, "display_on"):
+                    self.display.display_on(True)
+                if hasattr(self.display, "set_contrast"):
+                    self.display.set_contrast(target)
+                elif hasattr(self.display, "ssd1306_command"):
+                    self.display.ssd1306_command(0xAF)
+                    self.display.ssd1306_command(0x81)
+                    self.display.ssd1306_command(target)
+            except Exception as e:
+                print("! Contrast instellen mislukt:", e)
+            self._display_dim_state = target
 
     def _apply_clock_dither(self, t):
         # Dither uitgeschakeld: voorkomt zichtbaar flikkeren/ademen op sommige OLED panelen.
@@ -2590,32 +2629,34 @@ class App:
                 pass
         self.display.fill(0)
         self._draw_big_time(t[3], t[4])
-        # Alarmregel: normaal het eerstvolgende alarm, maar tijdens snooze een countdown.
-        snooze_sec = self._snooze_remaining_seconds()
-        if snooze_sec > 0:
-            sh = snooze_sec // 3600
-            sm = (snooze_sec % 3600) // 60
-            ss = snooze_sec % 60
-            self.display.text("SNOOZE {:02d}:{:02d}:{:02d}".format(sh, sm, ss), 0, 44, 1)
-        else:
-            next_alarm = self._next_alarm_info(t)
-            if next_alarm:
-                day_str, ah, am = next_alarm
-                if not day_str:
-                    day_str = self._weekday_short(t[6])  # vandaag, nog in de toekomst
-                alarm_text = "{} {:02d}:{:02d}".format(day_str, ah, am)
-                self._draw_alarm_icon(0, 44)
-                self.display.text(alarm_text, 10, 44, 1)
+        extra_dim = (self._display_manual_mode == 3)
+        if not extra_dim:
+            # Alarmregel: normaal het eerstvolgende alarm, maar tijdens snooze een countdown.
+            snooze_sec = self._snooze_remaining_seconds()
+            if snooze_sec > 0:
+                sh = snooze_sec // 3600
+                sm = (snooze_sec % 3600) // 60
+                ss = snooze_sec % 60
+                self.display.text("SNOOZE {:02d}:{:02d}:{:02d}".format(sh, sm, ss), 0, 44, 1)
             else:
-                self.display.text("--:--", 10, 44, 1)
-        # Day + date lines
-        self.display.text(self._weekday_short(t[6]), 0, 56, 1)
-        self.display.text("{:02d}-{:02d}".format(t[2], t[1]), 24, 56, 1)
-        self._draw_weather_overlay(t)
-        if self.wifi_disabled:
-            self._draw_wifi_off_icon(WIDTH - 16, HEIGHT - 11)
-        elif self.wifi_ok and self.wifi and self.wifi.is_connected():
-            self._draw_wifi_status_icon(WIDTH - 16, HEIGHT - 11)
+                next_alarm = self._next_alarm_info(t)
+                if next_alarm:
+                    day_str, ah, am = next_alarm
+                    if not day_str:
+                        day_str = self._weekday_short(t[6])  # vandaag, nog in de toekomst
+                    alarm_text = "{} {:02d}:{:02d}".format(day_str, ah, am)
+                    self._draw_alarm_icon(0, 44)
+                    self.display.text(alarm_text, 10, 44, 1)
+                else:
+                    self.display.text("--:--", 10, 44, 1)
+            # Day + date lines
+            self.display.text(self._weekday_short(t[6]), 0, 56, 1)
+            self.display.text("{:02d}-{:02d}".format(t[2], t[1]), 24, 56, 1)
+            self._draw_weather_overlay(t)
+            if self.wifi_disabled:
+                self._draw_wifi_off_icon(WIDTH - 16, HEIGHT - 11)
+            elif self.wifi_ok and self.wifi and self.wifi.is_connected():
+                self._draw_wifi_status_icon(WIDTH - 16, HEIGHT - 11)
 
         # Korte statusmelding na SET-kort in standaard scherm.
         now_ms = time.ticks_ms()
@@ -2654,18 +2695,19 @@ class App:
         old_buf = bytearray(self.display.buffer)   # bewaar huidig scherm
         self.display.fill(0)
         self._draw_big_time(t[3], t[4])
-        next_alarm = self._next_alarm_info(t)
-        if next_alarm:
-            day_str, ah, am = next_alarm
-            if not day_str:
-                day_str = self._weekday_short(t[6])
-            self._draw_alarm_icon(0, 44)
-            self.display.text("{} {:02d}:{:02d}".format(day_str, ah, am), 10, 44, 1)
-        else:
-            self.display.text("--:--", 10, 44, 1)
-        self.display.text(self._weekday_short(t[6]), 0, 56, 1)
-        self.display.text("{:02d}-{:02d}".format(t[2], t[1]), 24, 56, 1)
-        self._draw_weather_overlay(t)
+        if self._display_manual_mode != 3:
+            next_alarm = self._next_alarm_info(t)
+            if next_alarm:
+                day_str, ah, am = next_alarm
+                if not day_str:
+                    day_str = self._weekday_short(t[6])
+                self._draw_alarm_icon(0, 44)
+                self.display.text("{} {:02d}:{:02d}".format(day_str, ah, am), 10, 44, 1)
+            else:
+                self.display.text("--:--", 10, 44, 1)
+            self.display.text(self._weekday_short(t[6]), 0, 56, 1)
+            self.display.text("{:02d}-{:02d}".format(t[2], t[1]), 24, 56, 1)
+            self._draw_weather_overlay(t)
         snapshot = bytearray(self.display.buffer)
         self.display.buffer[:] = old_buf   # herstel
         return snapshot

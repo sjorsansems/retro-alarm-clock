@@ -10,7 +10,7 @@ Gebruik (vanuit de project-root):
     python tools/convert_upload.py mijn_animatie.gif --ip 192.168.1.x
 
 Opties:
-    --ip     IP-adres van de ESP32 (default: 192.168.4.1)
+    --ip     IP-adres van de ESP32 (default: alarmklok.local)
     --port   Poort van de webserver (default: 80)
     --name   Naam voor het .bin bestand (default: bestandsnaam van de GIF)
     --thr    Wit/zwart drempel 0-255 (default: 128)
@@ -46,7 +46,7 @@ def main():
         description="GIF converteren naar .bin en uploaden naar de alarmklok"
     )
     parser.add_argument("gif", help="Pad naar het GIF-bestand")
-    parser.add_argument("--ip",     default="192.168.4.1", help="IP-adres van de ESP32 (default: 192.168.4.1)")
+    parser.add_argument("--ip",     default="alarmklok.local", help="IP-adres van de ESP32 (default: 192.168.4.1)")
     parser.add_argument("--port",   type=int, default=80,  help="Webserver poort (default: 80)")
     parser.add_argument("--name",   default=None,          help="Naam voor het .bin bestand (zonder extensie)")
     parser.add_argument("--thr",    type=int, default=128, help="Drempel 0-255 (default: 128)")
