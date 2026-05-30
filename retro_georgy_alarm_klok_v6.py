@@ -137,6 +137,7 @@ SET_BUTTON_PIN = 14   # Touch14 / ADC2_3 — vrij
 DAY_KEYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 APP_VERSION = "6.0.1"
 DEFAULT_UPDATE_MANIFEST_URL = "https://sjorsansems.github.io/retro-alarm-clock/updates/stable/manifest.json"
+ANIMATIONS_DIR = "animations"
 
 # Aantal MP3-nummers op de SD-kaart (lied 1 t/m N)
 DFPLAYER_TRACK_COUNT = 30
@@ -1377,11 +1378,12 @@ class App:
     def _list_gif_names(self):
         import os as _os
         names = []
-        for path in ('/', '.'):
+        search_paths = ('/' + ANIMATIONS_DIR, ANIMATIONS_DIR, '/', '.')
+        for path in search_paths:
             try:
-                names = [f[:-4] for f in _os.listdir(path) if isinstance(f, str) and f.endswith('.bin')]
-                if names:
-                    break
+                for f in _os.listdir(path):
+                    if isinstance(f, str) and f.endswith('.bin'):
+                        names.append(f[:-4])
             except Exception:
                 pass
         return sorted(set(names))
@@ -4187,10 +4189,21 @@ class App:
             return False
         if self._gif_runtime_failed:
             return False
-        path = "/{}.bin".format(name)
-        try:
-            f = open(path, "rb")
-        except OSError:
+        path_candidates = (
+            "/{}/{}.bin".format(ANIMATIONS_DIR, name),
+            "{}/{}.bin".format(ANIMATIONS_DIR, name),
+            "/{}.bin".format(name),
+        )
+        f = None
+        path = ""
+        for candidate in path_candidates:
+            try:
+                f = open(candidate, "rb")
+                path = candidate
+                break
+            except OSError:
+                pass
+        if f is None:
             return False
         try:
             magic = f.read(2)
@@ -4428,7 +4441,7 @@ class App:
         return True, "ok"
 
     def _handle_upload_bin(self, c, headers_raw, body_buf, path):
-        """Stream binaire .bin upload naar alarm_gifs/<naam>.bin"""
+        """Stream binaire .bin upload naar animations/<naam>.bin"""
         import uos as _uos
         # Bestandsnaam uit query string ?name=
         name = ""
@@ -4468,7 +4481,12 @@ class App:
                 return
         except Exception:
             pass
-        dest = "/{}.bin".format(safe)
+        anim_dir = "/{}".format(ANIMATIONS_DIR)
+        try:
+            _uos.mkdir(anim_dir)
+        except Exception:
+            pass
+        dest = "{}/{}.bin".format(anim_dir, safe)
         written = 0
         try:
             with open(dest, "wb") as f:
@@ -4998,7 +5016,10 @@ class App:
                 c.send(self._json({"ok": False, "error": "Ongeldige naam"}))
                 return
             try:
-                _uos.remove("/{}.bin".format(safe))
+                try:
+                    _uos.remove("/{}/{}.bin".format(ANIMATIONS_DIR, safe))
+                except OSError:
+                    _uos.remove("/{}.bin".format(safe))
                 if safe in self._gif_tone_overrides:
                     self._gif_tone_overrides.pop(safe, None)
                     self._save_gif_tone_overrides()

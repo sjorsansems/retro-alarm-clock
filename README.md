@@ -320,7 +320,7 @@ Converter script:
 Example command:
 
 ```bash
-python tools/gif_to_frames.py --input gif/mario.gif --output mario.bin --width 128 --height 64 --fps 12 --bin
+python tools/gif_to_frames.py --input animations/mario.gif --output animations/mario.bin --width 128 --height 64 --fps 12 --bin
 ```
 
 Recommended settings:
