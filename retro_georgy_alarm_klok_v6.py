@@ -135,7 +135,7 @@ UP_BUTTON_PIN = 12    # Touch12 / ADC2_1 — omgewisseld op verzoek
 DOWN_BUTTON_PIN = 13  # Touch13 / ADC2_2 — omgewisseld op verzoek
 SET_BUTTON_PIN = 14   # Touch14 / ADC2_3 — vrij
 DAY_KEYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
-APP_VERSION = "6.1.5"
+APP_VERSION = "6.1.6"
 DEFAULT_UPDATE_MANIFEST_URL = "https://sjorsansems.github.io/retro-alarm-clock/updates/stable/manifest.json"
 ANIMATIONS_DIR = "animations"
 DEFAULT_RETRO_FACT_DISPLAY_SECONDS = 10
@@ -969,6 +969,9 @@ class App:
         self._space_game_music_restart_ms = 0
         self._space_game_next_update_ms = 0
         self._space_game_next_led_ms = 0
+        self._space_game_led_last_mode = "off"
+        self._space_game_led_last_idx = -1
+        self._space_game_repeat_next_ms = {"set": 0, "up": 0, "down": 0}
         self._easter_active_until = None
         self._easter_message = ""
         self._easter_key = None
@@ -1394,6 +1397,9 @@ class App:
         self._space_game_music_restart_ms = 0
         self._space_game_next_update_ms = now_ms
         self._space_game_next_led_ms = now_ms
+        self._space_game_led_last_mode = "off"
+        self._space_game_led_last_idx = -1
+        self._space_game_repeat_next_ms = {"set": now_ms, "up": now_ms, "down": now_ms}
         self._space_game_spawn_wave(now_ms)
         self._space_game_start_music(now_ms)
         return True
@@ -1409,6 +1415,9 @@ class App:
         self._space_game_wave_flash_until = 0
         self._space_game_music_track = 0
         self._space_game_music_restart_ms = 0
+        self._space_game_led_last_mode = "off"
+        self._space_game_led_last_idx = -1
+        self._space_game_repeat_next_ms = {"set": 0, "up": 0, "down": 0}
         if self.dfplayer is not None and self.alarm_until is None:
             try:
                 self.dfplayer.stop()
@@ -1500,52 +1509,31 @@ class App:
         self._space_game_next_led_ms = time.ticks_add(now_ms, 45)
         try:
             if time.ticks_diff(self._space_game_hit_flash_until, now_ms) > 0:
-                self.leds.set_all(255, 0, 0)
-                self.leds.show()
-                return
-            if time.ticks_diff(self._space_game_wave_flash_until, now_ms) > 0:
-                phase = (now_ms // 90) % 6
-                palette = [
-                    (255, 0, 0),
-                    (255, 120, 0),
-                    (255, 255, 0),
-                    (0, 180, 0),
-                    (0, 120, 255),
-                    (160, 0, 255),
-                ]
-                for i in range(self.leds.num_leds):
-                    c = palette[(i + phase) % len(palette)]
-                    self.leds.set_pixel(i, c[0], c[1], c[2])
-                self.leds.show()
+                if self._space_game_led_last_mode != "hit":
+                    self.leds.set_all(255, 0, 0)
+                    self.leds.show()
+                    self._space_game_led_last_mode = "hit"
+                    self._space_game_led_last_idx = -1
                 return
 
-            beat = ((now_ms // 170) % 4)
-            pattern = self._space_game_pattern
-            if pattern == "zigzag":
-                base = (25, 0, 40) if beat in (0, 2) else (0, 55, 70)
-            elif pattern == "dive":
-                base = (70, 25, 0) if beat in (0, 1) else (25, 8, 0)
-            elif pattern == "mothership":
-                base = (90, 0, 35) if beat in (0, 2) else (40, 0, 10)
-            else:
-                base = (0, 18, 55) if beat in (0, 2) else (0, 8, 30)
-            self.leds.set_all(base[0], base[1], base[2])
-
-            if self._space_game_state == "play":
+            if time.ticks_diff(self._space_game_shot_flash_until, now_ms) > 0 and self._space_game_state == "play":
                 idx = (self._space_game_ship_x * self.leds.num_leds) // 128
                 if idx < 0:
                     idx = 0
                 if idx >= self.leds.num_leds:
                     idx = self.leds.num_leds - 1
-                self.leds.set_pixel(idx, 40, 200, 255)
-                if time.ticks_diff(self._space_game_shot_flash_until, now_ms) > 0:
+                if self._space_game_led_last_mode != "shot" or self._space_game_led_last_idx != idx:
+                    self.leds.clear()
                     self.leds.set_pixel(idx, 255, 255, 255)
+                    self.leds.show()
+                    self._space_game_led_last_mode = "shot"
+                    self._space_game_led_last_idx = idx
+                return
 
-            if pattern == "mothership" and self._space_game_mothership is not None:
-                head = (now_ms // 110) % self.leds.num_leds
-                self.leds.set_pixel(head, 255, 40, 120)
-
-            self.leds.show()
+            if self._space_game_led_last_mode != "off":
+                self.leds.clear()
+                self._space_game_led_last_mode = "off"
+                self._space_game_led_last_idx = -1
         except Exception:
             pass
 
@@ -1811,8 +1799,8 @@ class App:
 
         if self._space_game_state == "game_over":
             self.display.text("GAME OVER", 24, 22, 1)
-            self.display.text("SET=RETRY", 20, 34, 1)
-            self.display.text("HOLD UP EXIT", 12, 46, 1)
+            self.display.text("LEFT=RETRY", 16, 34, 1)
+            self.display.text("HOLD MID EXIT", 10, 46, 1)
             self.display.show()
             return True
 
@@ -2935,6 +2923,12 @@ class App:
 
     def _handle_buttons(self):
         now = time.ticks_ms()
+
+        def _space_repeat_delay(btn_name):
+            if btn_name == "up":
+                return 90
+            return 65
+
         buttons = [
             ("set",  self._set_short_press,  self._set_long_press,  self.btn_set,  2200),
             ("up",   self._up_short_press,   self._up_long_press,    self.btn_up,   3000),
@@ -2946,11 +2940,10 @@ class App:
             if self._space_game_active:
                 if s["pending"] == "short":
                     s["pending"] = None
-                    self._mark_activity()
                     self._space_game_handle_button(name)
+                    self._space_game_repeat_next_ms[name] = time.ticks_add(now, _space_repeat_delay(name))
                 elif s["pending"] == "long":
                     s["pending"] = None
-                    self._mark_activity()
                     if name == "up":
                         self._stop_space_game()
                         self._set_feedback("SPACE EXIT", ms=900)
@@ -2958,9 +2951,17 @@ class App:
                     if s["start"] > 0 and time.ticks_diff(now, s["start"]) >= long_ms:
                         s["fired_long"] = True
                         s["pending"] = None
-                        self._mark_activity()
                         self._stop_space_game()
                         self._set_feedback("SPACE EXIT", ms=900)
+                        continue
+
+                if pin_obj.value() == 0 and name in self._space_game_repeat_next_ms:
+                    next_ms = self._space_game_repeat_next_ms[name]
+                    if next_ms == 0 or time.ticks_diff(now, next_ms) >= 0:
+                        self._space_game_handle_button(name)
+                        self._space_game_repeat_next_ms[name] = time.ticks_add(now, _space_repeat_delay(name))
+                else:
+                    self._space_game_repeat_next_ms[name] = 0
                 continue
 
             # Alarm actief: SET stopt, DOWN snooze 10 min, UP doet niets.

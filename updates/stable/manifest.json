@@ -1,7 +1,7 @@
 {
-  "version": "6.1.5",
+  "version": "6.1.6",
   "channel": "stable",
-  "notes": "Space Game performance update: smoother gameplay, reduced stutter, and softer early dive waves",
+  "notes": "Space Game input responsiveness improved for rapid button presses while keeping normal clock controls unchanged",
   "files": [
     {
       "path": "retro_georgy_alarm_klok_v6.py",
