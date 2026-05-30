@@ -1,7 +1,7 @@
 {
-  "version": "6.1.6",
+  "version": "6.1.7",
   "channel": "stable",
-  "notes": "Space Game input responsiveness improved for rapid button presses while keeping normal clock controls unchanged",
+  "notes": "Level 1 Space Game now uses clearer Phoenix-like bird waves for immediate visual recognition",
   "files": [
     {
       "path": "retro_georgy_alarm_klok_v6.py",

@@ -135,7 +135,7 @@ UP_BUTTON_PIN = 12    # Touch12 / ADC2_1 — omgewisseld op verzoek
 DOWN_BUTTON_PIN = 13  # Touch13 / ADC2_2 — omgewisseld op verzoek
 SET_BUTTON_PIN = 14   # Touch14 / ADC2_3 — vrij
 DAY_KEYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
-APP_VERSION = "6.1.6"
+APP_VERSION = "6.1.7"
 DEFAULT_UPDATE_MANIFEST_URL = "https://sjorsansems.github.io/retro-alarm-clock/updates/stable/manifest.json"
 ANIMATIONS_DIR = "animations"
 DEFAULT_RETRO_FACT_DISPLAY_SECONDS = 10
@@ -1289,6 +1289,8 @@ class App:
         return True
 
     def _space_game_pattern_for_wave(self):
+        if self._space_game_wave == 1:
+            return "march"
         if self._space_game_wave > 0 and (self._space_game_wave % 5) == 0:
             return "mothership"
         mode = self._space_game_wave % 3
@@ -1334,6 +1336,10 @@ class App:
         step_y = 8
         for row in range(rows):
             for col in range(cols):
+                if self._space_game_wave == 1:
+                    sprite_id = (col + row) % 2
+                else:
+                    sprite_id = (row + col + self._space_game_wave) % 4
                 self._space_game_enemies.append({
                     "x": start_x + col * step_x,
                     "y": start_y + row * step_y,
@@ -1341,7 +1347,7 @@ class App:
                     "yoff": 0,
                     "col": col,
                     "row": row,
-                    "sprite": (row + col + self._space_game_wave) % 4,
+                    "sprite": sprite_id,
                     "dive": False,
                     "dx": 0,
                     "alive": True,
