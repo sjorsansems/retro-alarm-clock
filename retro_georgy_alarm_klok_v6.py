@@ -135,9 +135,10 @@ UP_BUTTON_PIN = 12    # Touch12 / ADC2_1 — omgewisseld op verzoek
 DOWN_BUTTON_PIN = 13  # Touch13 / ADC2_2 — omgewisseld op verzoek
 SET_BUTTON_PIN = 14   # Touch14 / ADC2_3 — vrij
 DAY_KEYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
-APP_VERSION = "6.0.5"
+APP_VERSION = "6.0.8"
 DEFAULT_UPDATE_MANIFEST_URL = "https://sjorsansems.github.io/retro-alarm-clock/updates/stable/manifest.json"
 ANIMATIONS_DIR = "animations"
+DEFAULT_RETRO_FACT_DISPLAY_SECONDS = 10
 RETRO_FACT_LIBRARY = [
     "1977: Atari released the VCS, later known as the Atari 2600",
     "1980: Pac-Man turned arcades into a global phenomenon",
@@ -648,6 +649,7 @@ class App:
         self.auto_update_enabled = False
         self.update_manifest_url = DEFAULT_UPDATE_MANIFEST_URL
         self.update_check_interval_hours = 24
+        self.retro_fact_display_seconds = DEFAULT_RETRO_FACT_DISPLAY_SECONDS
         self.setup_mode = False
         self.setup_reason = ""
         self.setup_ap_ssid = SETUP_AP_SSID
@@ -666,6 +668,9 @@ class App:
             self.update_manifest_url = self._normalize_manifest_url(self.config.get("update", "manifest_url", DEFAULT_UPDATE_MANIFEST_URL))
             self.update_check_interval_hours = self._normalize_update_check_interval_hours(
                 self.config.get("update", "check_interval_hours", 24)
+            )
+            self.retro_fact_display_seconds = self._normalize_retro_fact_display_seconds(
+                self.config.get("retro_fact", "display_seconds", DEFAULT_RETRO_FACT_DISPLAY_SECONDS)
             )
 
         self.clock = ClockCore(timezone)
@@ -931,6 +936,17 @@ class App:
             return 1
         if n > 168:
             return 168
+        return n
+
+    def _normalize_retro_fact_display_seconds(self, value):
+        try:
+            n = int(value)
+        except Exception:
+            return DEFAULT_RETRO_FACT_DISPLAY_SECONDS
+        if n < 1:
+            return 1
+        if n > 60:
+            return 60
         return n
 
     def _normalize_manifest_url(self, value):
@@ -1651,7 +1667,7 @@ class App:
         self._set_feedback_lines = ["RETRO FACT", "---"] + self._wrap_feedback_lines(fact, max_chars=12, limit=8)
         self._set_feedback_text = fact
         self._set_feedback_start_ms = time.ticks_ms()
-        self._set_feedback_until = time.ticks_add(time.ticks_ms(), 10000)
+        self._set_feedback_until = time.ticks_add(time.ticks_ms(), self.retro_fact_display_seconds * 1000)
         print("Retro fact:", fact)
         return fact, source
 
@@ -4808,6 +4824,7 @@ class App:
                 "update_auto_enabled": self.auto_update_enabled,
                 "update_manifest_url": self.update_manifest_url,
                 "update_check_interval_hours": self.update_check_interval_hours,
+                "retro_fact_display_seconds": self.retro_fact_display_seconds,
                 "update_last_status": self._update_last_status,
                 "update_last_error": self._update_last_error
             }))
@@ -4927,6 +4944,18 @@ class App:
                 self.config.set("update", "manifest_url", self.update_manifest_url)
                 self.config.set("update", "check_interval_hours", self.update_check_interval_hours)
             c.send(self._json({"ok": True, "update": self._get_update_status_payload()}))
+            return
+        if method == "POST" and path == "/api/set-retro-fact-settings":
+            d = self._parse(req)
+            self.retro_fact_display_seconds = self._normalize_retro_fact_display_seconds(
+                d.get("display_seconds", self.retro_fact_display_seconds)
+            )
+            if self.config:
+                self.config.set("retro_fact", "display_seconds", self.retro_fact_display_seconds)
+            c.send(self._json({
+                "ok": True,
+                "retro_fact_display_seconds": self.retro_fact_display_seconds,
+            }))
             return
         if method == "POST" and path == "/api/set-wifi-credentials":
             d = self._parse(req)
@@ -5116,7 +5145,8 @@ class App:
                         "source": source,
                         "mode": "manual",
                         "status": "ok",
-                        "display_ms": 10000,
+                        "display_ms": self.retro_fact_display_seconds * 1000,
+                        "display_seconds": self.retro_fact_display_seconds,
                     }))
             except Exception as e:
                 c.send(self._json({"ok": False, "error": str(e)}))

@@ -341,8 +341,17 @@ code{background:#15112a;border:1px solid #4d4175;padding:1px 5px;border-radius:0
   <div class="card">
     <h3>&#127918; Retro Fact Test</h3>
     <p style="font-size:13px;color:var(--muted);margin:0 0 10px">
-      Test de lokale retro-fact en toon hem 10 seconden op het scherm zonder het alarm af te laten gaan.
+      Test de lokale retro-fact en stel in hoe lang hij op het scherm blijft zonder het alarm af te laten gaan.
     </p>
+    <div class="grid" style="margin-bottom:10px">
+      <div>
+        <label for="retroFactSecondsInput">Toonduur (seconden)</label>
+        <input id="retroFactSecondsInput" type="number" min="1" max="60" value="10">
+      </div>
+      <div style="display:flex;align-items:flex-end">
+        <button onclick="saveRetroFactSettings()">Retro fact duur opslaan</button>
+      </div>
+    </div>
     <div class="row">
       <button class="alt" onclick="testRetroFactNow()">Test retro fact</button>
       <button class="ghost" onclick="refresh()">Status verversen</button>
@@ -871,6 +880,7 @@ async function refresh(){
       document.getElementById('updateAutoInput').value=data.update_auto_enabled?'1':'0'
       document.getElementById('updateIntervalInput').value=data.update_check_interval_hours??24
       document.getElementById('updateManifestInput').value=data.update_manifest_url||''
+      document.getElementById('retroFactSecondsInput').value=data.retro_fact_display_seconds||10
       renderSchedule(data.alarm_schedule||{},data.alarm_tones||[],data.alarm_combo||{},data.alarm_gif_combo||{})
     }
     setStatus(tr('connected'),false)
@@ -969,6 +979,21 @@ async function saveUpdateSettings(){
   refresh()
 }
 
+async function saveRetroFactSettings(){
+  markEditing()
+  const out=await apiPost('/api/set-retro-fact-settings',{
+    display_seconds:Number(document.getElementById('retroFactSecondsInput').value||10)
+  })
+  if(out.ok){
+    const seconds=Number(out.retro_fact_display_seconds||document.getElementById('retroFactSecondsInput').value||10)
+    setStatus(`Retro fact duur opgeslagen (${seconds} sec)`,false)
+  }else{
+    setStatus(out.error||'Retro fact duur opslaan mislukt',true)
+  }
+  editingUntil=0
+  refresh()
+}
+
 async function checkUpdatesNow(){
   const out=await apiPost('/api/check-updates',{})
   if(out.ok){
@@ -1015,7 +1040,8 @@ async function testRetroFactNow(){
   if(preview)preview.textContent='Fact ophalen...'
   const out=await apiPost('/api/test-retro-fact',{})
   if(out.ok){
-    if(status)status.textContent='Retro fact status: OK | bron: '+(out.source||'-')+' | 10 sec op scherm'
+    const seconds=Number(out.display_seconds||document.getElementById('retroFactSecondsInput').value||10)
+    if(status)status.textContent='Retro fact status: OK | bron: '+(out.source||'-')+' | '+seconds+' sec op scherm'
     if(preview)preview.textContent=out.fact||'-'
   }else{
     if(status)status.textContent='Retro fact status: error | '+(out.error||'onbekend')
@@ -1319,7 +1345,7 @@ async function saveTrackLabel(track){
   }
 }
 
-['timeInput','secInput','timezoneInput','languageInput','testAnimationInput','volumeInput','testSecondsInput','weatherPlaceInput','weatherUpdatesInput','wifiKeepAliveInput','wifiSsidInput','wifiPasswordInput','updateAutoInput','updateIntervalInput','updateManifestInput'].forEach(bindEditor)
+['timeInput','secInput','timezoneInput','languageInput','testAnimationInput','volumeInput','testSecondsInput','weatherPlaceInput','weatherUpdatesInput','wifiKeepAliveInput','wifiSsidInput','wifiPasswordInput','updateAutoInput','updateIntervalInput','updateManifestInput','retroFactSecondsInput'].forEach(bindEditor)
 document.getElementById('testAnimationInput').addEventListener('change',updateToneScheme)
 populateTimezones('Europe/Amsterdam')
 applyLanguage('nl')

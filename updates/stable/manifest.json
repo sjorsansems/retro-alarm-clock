@@ -1,7 +1,7 @@
 {
-  "version": "6.0.7",
+  "version": "6.0.8",
   "channel": "stable",
-  "notes": "Retro facts wrap harder so long facts scroll vertically on the screen",
+  "notes": "Retro fact display duration is configurable from the web interface",
   "files": [
     {
       "path": "retro_georgy_alarm_klok_v6.py",
