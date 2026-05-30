@@ -34,6 +34,25 @@ Main features:
 - Setup access point mode for first-time WiFi setup
 - Safe boot fallback to backup app after repeated boot failures
 
+## Demo Video
+
+A short demo video is included in:
+
+- `video/VID_20260530_151530653.mp4`
+
+On GitHub you can open this file directly to watch/download the demo.
+
+## 3D Print Files (STL)
+
+3D printable enclosure/model files are included in:
+
+- `stl files/front.stl`
+- `stl files/back.stl`
+- `stl files/button.stl`
+- `stl files/buttonholders.stl`
+
+You can slice and print these parts to build the physical case.
+
 ## Hardware Requirements
 
 - 1x ESP32-S3 DevKitC-1 -> I used a N16R8, other models not tested. Enough Ram is mandantory. 
