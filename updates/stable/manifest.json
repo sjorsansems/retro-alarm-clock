@@ -1,7 +1,7 @@
 {
-  "version": "6.1.4",
+  "version": "6.1.5",
   "channel": "stable",
-  "notes": "Phoenix-style Space Game expanded with sprites, wave patterns, mothership phase, and tuned controls",
+  "notes": "Space Game performance update: smoother gameplay, reduced stutter, and softer early dive waves",
   "files": [
     {
       "path": "retro_georgy_alarm_klok_v6.py",

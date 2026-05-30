@@ -135,7 +135,7 @@ UP_BUTTON_PIN = 12    # Touch12 / ADC2_1 — omgewisseld op verzoek
 DOWN_BUTTON_PIN = 13  # Touch13 / ADC2_2 — omgewisseld op verzoek
 SET_BUTTON_PIN = 14   # Touch14 / ADC2_3 — vrij
 DAY_KEYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
-APP_VERSION = "6.1.4"
+APP_VERSION = "6.1.5"
 DEFAULT_UPDATE_MANIFEST_URL = "https://sjorsansems.github.io/retro-alarm-clock/updates/stable/manifest.json"
 ANIMATIONS_DIR = "animations"
 DEFAULT_RETRO_FACT_DISPLAY_SECONDS = 10
@@ -967,6 +967,8 @@ class App:
         self._space_game_wave_flash_until = 0
         self._space_game_music_track = 0
         self._space_game_music_restart_ms = 0
+        self._space_game_next_update_ms = 0
+        self._space_game_next_led_ms = 0
         self._easter_active_until = None
         self._easter_message = ""
         self._easter_key = None
@@ -1390,6 +1392,8 @@ class App:
         self._space_game_wave_flash_until = 0
         self._space_game_music_track = 0
         self._space_game_music_restart_ms = 0
+        self._space_game_next_update_ms = now_ms
+        self._space_game_next_led_ms = now_ms
         self._space_game_spawn_wave(now_ms)
         self._space_game_start_music(now_ms)
         return True
@@ -1491,6 +1495,9 @@ class App:
     def _update_space_game_leds(self, now_ms):
         if self.leds is None:
             return
+        if time.ticks_diff(now_ms, self._space_game_next_led_ms) < 0:
+            return
+        self._space_game_next_led_ms = time.ticks_add(now_ms, 45)
         try:
             if time.ticks_diff(self._space_game_hit_flash_until, now_ms) > 0:
                 self.leds.set_all(255, 0, 0)
@@ -1543,6 +1550,14 @@ class App:
             pass
 
     def _space_game_spawn_dive_enemy(self, now_ms):
+        if self._space_game_wave <= 3:
+            active_divers = 0
+            for e in self._space_game_enemies:
+                if e.get("alive") and e.get("dive"):
+                    active_divers += 1
+            if active_divers >= 1:
+                self._space_game_dive_next_ms = time.ticks_add(now_ms, 520)
+                return
         candidates = [e for e in self._space_game_enemies if e["alive"] and (not e.get("dive"))]
         if not candidates:
             return
@@ -1551,6 +1566,8 @@ class App:
         pick["dx"] = 1 if pick["x"] < self._space_game_ship_x else -1
         pick["yoff"] = 0
         gap = 760 - (self._space_game_wave * 35)
+        if self._space_game_wave <= 3:
+            gap += 220
         if gap < 260:
             gap = 260
         self._space_game_dive_next_ms = time.ticks_add(now_ms, gap)
@@ -1604,6 +1621,10 @@ class App:
     def _update_space_game(self, now_ms):
         if not self._space_game_active:
             return
+        if time.ticks_diff(now_ms, self._space_game_next_update_ms) < 0:
+            self._space_game_tick_music(now_ms)
+            return
+        self._space_game_next_update_ms = time.ticks_add(now_ms, 28)
         self._space_game_tick_music(now_ms)
         self._space_game_enemy_flap_frame = (now_ms // 180) % 2
         if self._space_game_state != "play":
@@ -1674,8 +1695,10 @@ class App:
                         drift = 1 if enemy["x"] < self._space_game_ship_x else -1
                         if (int(now_ms // 90) % 2) == 0:
                             enemy["dx"] = drift
-                        enemy["x"] += enemy["dx"] * 2
-                        enemy["y"] += 2 + (self._space_game_wave // 4)
+                        x_step = 1 if self._space_game_wave <= 3 else 2
+                        y_step = 1 if self._space_game_wave <= 3 else (2 + (self._space_game_wave // 4))
+                        enemy["x"] += enemy["dx"] * x_step
+                        enemy["y"] += y_step
                         enemy["yoff"] = 0
                         if enemy["x"] < 2:
                             enemy["x"] = 2
@@ -1702,7 +1725,7 @@ class App:
             if self._space_game_pattern == "zigzag":
                 fire_interval -= 70
             if self._space_game_pattern == "dive":
-                fire_interval -= 110
+                fire_interval -= (70 if self._space_game_wave <= 3 else 110)
             if fire_interval < 110:
                 fire_interval = 110
 
@@ -1719,6 +1742,8 @@ class App:
                 shooter_list = list(shooters.values())
                 if shooter_list:
                     burst = 1 + (self._space_game_wave // 4)
+                    if self._space_game_wave <= 3:
+                        burst = 1
                     if burst > 3:
                         burst = 3
                     for i in range(burst):
@@ -1746,6 +1771,8 @@ class App:
         sx0 = self._space_game_ship_x
         sy0 = self._space_game_ship_y
         bullet_speed = 3 + (self._space_game_wave // 5)
+        if self._space_game_wave <= 3:
+            bullet_speed = 2
         if bullet_speed > 5:
             bullet_speed = 5
         for shot in self._space_game_enemy_bullets:
@@ -1801,338 +1828,6 @@ class App:
                 if enemy["alive"]:
                     ey = enemy["y"] + enemy.get("yoff", 0)
                     self._draw_space_enemy_sprite(enemy["x"], ey, enemy.get("sprite", 0), self._space_game_enemy_flap_frame)
-
-        if self._space_game_player_bullet is not None:
-            self.display.fill_rect(self._space_game_player_bullet["x"], self._space_game_player_bullet["y"], 2, 4, 1)
-
-        for shot in self._space_game_enemy_bullets:
-            self.display.fill_rect(shot["x"], shot["y"], 2, 3, 1)
-
-        sx = self._space_game_ship_x
-        sy = self._space_game_ship_y
-        self.display.fill_rect(sx, sy + 2, 10, 2, 1)
-        self.display.pixel(sx + 4, sy, 1)
-        self.display.pixel(sx + 5, sy, 1)
-        self.display.pixel(sx + 3, sy + 1, 1)
-        self.display.pixel(sx + 6, sy + 1, 1)
-
-        self.display.show()
-        return True
-
-    def _space_game_spawn_wave(self, now_ms):
-        self._space_game_enemies = []
-        cols = 7
-        rows = 3 + (1 if self._space_game_wave >= 4 else 0)
-        start_x = 10
-        step_x = 16
-        start_y = 8
-        step_y = 8
-        for row in range(rows):
-            for col in range(cols):
-                self._space_game_enemies.append({
-                    "x": start_x + col * step_x,
-                    "y": start_y + row * step_y,
-                    "col": col,
-                    "sprite": (row + col) % 4,
-                    "alive": True,
-                })
-        self._space_game_enemy_dir = 1
-        self._space_game_enemy_flap_frame = 0
-        self._space_game_player_bullet = None
-        self._space_game_enemy_bullets = []
-        self._space_game_next_enemy_step_ms = now_ms
-        self._space_game_next_enemy_fire_ms = time.ticks_add(now_ms, 520)
-
-    def _draw_space_enemy_sprite(self, x, y, sprite_idx, flap_frame):
-        frames = SPACE_BIRD_SPRITES.get(sprite_idx, SPACE_BIRD_SPRITES[0])
-        frame = frames[flap_frame % 2]
-        for py in range(5):
-            row = frame[py]
-            for px in range(8):
-                if row[px] == "1":
-                    self.display.pixel(x + px, y + py, 1)
-
-    def _start_space_game(self):
-        if self.alarm_until is not None or self.setup_mode or self.alarm_edit_mode:
-            return False
-        now_ms = time.ticks_ms()
-        self._mark_activity()
-        self._dos_idle_active_until = 0
-        self._dos_idle_scene = None
-        self._space_game_active = True
-        self._space_game_state = "play"
-        self._space_game_ship_x = 58
-        self._space_game_ship_y = 58
-        self._space_game_score = 0
-        self._space_game_wave = 1
-        self._space_game_lives = 3
-        self._space_game_last_fire_ms = 0
-        self._space_game_hit_flash_until = 0
-        self._space_game_shot_flash_until = 0
-        self._space_game_wave_flash_until = 0
-        self._space_game_music_track = 0
-        self._space_game_music_restart_ms = 0
-        self._space_game_spawn_wave(now_ms)
-        self._space_game_start_music(now_ms)
-        return True
-
-    def _stop_space_game(self):
-        self._space_game_active = False
-        self._space_game_state = ""
-        self._space_game_enemies = []
-        self._space_game_enemy_bullets = []
-        self._space_game_player_bullet = None
-        self._space_game_shot_flash_until = 0
-        self._space_game_wave_flash_until = 0
-        self._space_game_music_track = 0
-        self._space_game_music_restart_ms = 0
-        if self.dfplayer is not None and self.alarm_until is None:
-            try:
-                self.dfplayer.stop()
-                self.dfplayer.set_volume(0)
-                self._dfplayer_playing = False
-            except Exception:
-                pass
-        if self.leds is not None:
-            try:
-                if self._nightlight_on:
-                    for i in range(self.leds.num_leds):
-                        self.leds.set_pixel(i, 255, 120, 40)
-                    self.leds.show()
-                else:
-                    self.leds.clear()
-            except Exception:
-                pass
-
-    def _space_game_set_game_over(self):
-        self._space_game_state = "game_over"
-        if self._space_game_score > self._space_game_high_score:
-            self._space_game_high_score = self._space_game_score
-        self._space_game_player_bullet = None
-        self._space_game_enemy_bullets = []
-
-    def _space_game_handle_button(self, name):
-        if not self._space_game_active:
-            return
-        if self._space_game_state == "game_over":
-            if name == "set":
-                self._start_space_game()
-            return
-        if name == "set":
-            self._space_game_ship_x = max(4, self._space_game_ship_x - 8)
-            return
-        if name == "down":
-            self._space_game_ship_x = min(114, self._space_game_ship_x + 8)
-            return
-        if name == "up":
-            now_ms = time.ticks_ms()
-            if self._space_game_player_bullet is None and time.ticks_diff(now_ms, self._space_game_last_fire_ms) >= 140:
-                self._space_game_player_bullet = {"x": self._space_game_ship_x + 4, "y": self._space_game_ship_y - 4}
-                self._space_game_last_fire_ms = now_ms
-                self._space_game_shot_flash_until = time.ticks_add(now_ms, 90)
-
-    def _space_game_start_music(self, now_ms):
-        tone = self._normalize_space_game_music_tone(self.space_game_music_tone)
-        if tone == "0":
-            return
-        if not self._ensure_dfplayer_ready():
-            return
-        try:
-            track = int(tone) + 1
-            if track < 1:
-                track = 1
-            if track > DFPLAYER_TRACK_COUNT:
-                track = DFPLAYER_TRACK_COUNT
-            vol = max(0, min(30, int(self.volume * 22 // 100)))
-            self.dfplayer.set_volume(vol)
-            self.dfplayer.play_mp3(track)
-            self._dfplayer_playing = True
-            self._dfplayer_track_num = track
-            self._space_game_music_track = track
-            self._space_game_music_restart_ms = time.ticks_add(now_ms, 70000)
-        except Exception as _e:
-            print("! Space game muziek startfout:", _e)
-            self._space_game_music_track = 0
-            self._space_game_music_restart_ms = 0
-
-    def _space_game_tick_music(self, now_ms):
-        if not self._space_game_active:
-            return
-        if self._space_game_music_track <= 0:
-            return
-        if time.ticks_diff(now_ms, self._space_game_music_restart_ms) < 0:
-            return
-        try:
-            self.dfplayer.play_mp3(self._space_game_music_track)
-            self._space_game_music_restart_ms = time.ticks_add(now_ms, 70000)
-        except Exception:
-            self._space_game_music_track = 0
-            self._space_game_music_restart_ms = 0
-
-    def _update_space_game_leds(self, now_ms):
-        if self.leds is None:
-            return
-        try:
-            if time.ticks_diff(self._space_game_hit_flash_until, now_ms) > 0:
-                self.leds.set_all(255, 0, 0)
-                self.leds.show()
-                return
-            if time.ticks_diff(self._space_game_wave_flash_until, now_ms) > 0:
-                phase = (now_ms // 90) % 6
-                palette = [
-                    (255, 0, 0),
-                    (255, 120, 0),
-                    (255, 255, 0),
-                    (0, 180, 0),
-                    (0, 120, 255),
-                    (160, 0, 255),
-                ]
-                for i in range(self.leds.num_leds):
-                    c = palette[(i + phase) % len(palette)]
-                    self.leds.set_pixel(i, c[0], c[1], c[2])
-                self.leds.show()
-                return
-            self.leds.set_all(0, 0, 24)
-            if self._space_game_state == "play":
-                idx = (self._space_game_ship_x * self.leds.num_leds) // 128
-                if idx < 0:
-                    idx = 0
-                if idx >= self.leds.num_leds:
-                    idx = self.leds.num_leds - 1
-                self.leds.set_pixel(idx, 40, 200, 255)
-                if time.ticks_diff(self._space_game_shot_flash_until, now_ms) > 0:
-                    self.leds.set_pixel(idx, 255, 255, 255)
-            elif ((now_ms // 180) % 2) == 0:
-                self.leds.set_all(255, 80, 0)
-            self.leds.show()
-        except Exception:
-            pass
-
-    def _update_space_game(self, now_ms):
-        if not self._space_game_active:
-            return
-        self._space_game_tick_music(now_ms)
-        self._space_game_enemy_flap_frame = (now_ms // 180) % 2
-        if self._space_game_state != "play":
-            return
-
-        if self._space_game_player_bullet is not None:
-            self._space_game_player_bullet["y"] -= 4
-            if self._space_game_player_bullet["y"] < 0:
-                self._space_game_player_bullet = None
-            else:
-                bx = self._space_game_player_bullet["x"]
-                by = self._space_game_player_bullet["y"]
-                for enemy in self._space_game_enemies:
-                    if not enemy["alive"]:
-                        continue
-                    ex = enemy["x"]
-                    ey = enemy["y"]
-                    if (bx >= ex) and (bx <= ex + 8) and (by >= ey) and (by <= ey + 5):
-                        enemy["alive"] = False
-                        self._space_game_player_bullet = None
-                        self._space_game_score += 10
-                        break
-
-        interval = 260 - (self._space_game_wave * 14)
-        if interval < 90:
-            interval = 90
-        if time.ticks_diff(now_ms, self._space_game_next_enemy_step_ms) >= 0:
-            alive = [e for e in self._space_game_enemies if e["alive"]]
-            if alive:
-                hit_edge = False
-                for enemy in alive:
-                    nx = enemy["x"] + (self._space_game_enemy_dir * 2)
-                    if nx < 4 or nx > 118:
-                        hit_edge = True
-                        break
-                if hit_edge:
-                    self._space_game_enemy_dir *= -1
-                    for enemy in alive:
-                        enemy["y"] += 4
-                        if enemy["y"] >= 50:
-                            self._space_game_set_game_over()
-                            return
-                else:
-                    for enemy in alive:
-                        enemy["x"] += self._space_game_enemy_dir * 2
-            self._space_game_next_enemy_step_ms = time.ticks_add(now_ms, interval)
-
-        fire_interval = 620 - (self._space_game_wave * 35)
-        if fire_interval < 140:
-            fire_interval = 140
-        if time.ticks_diff(now_ms, self._space_game_next_enemy_fire_ms) >= 0:
-            shooters = {}
-            for enemy in self._space_game_enemies:
-                if not enemy["alive"]:
-                    continue
-                col = enemy["col"]
-                cur = shooters.get(col)
-                if cur is None or enemy["y"] > cur["y"]:
-                    shooters[col] = enemy
-            shooter_list = list(shooters.values())
-            if shooter_list:
-                idx = (int(now_ms) + self._space_game_score * 17 + self._space_game_wave * 9) % len(shooter_list)
-                shooter = shooter_list[idx]
-                self._space_game_enemy_bullets.append({"x": shooter["x"] + 3, "y": shooter["y"] + 5})
-            self._space_game_next_enemy_fire_ms = time.ticks_add(now_ms, fire_interval)
-
-        remaining = []
-        sx0 = self._space_game_ship_x
-        sy0 = self._space_game_ship_y
-        for shot in self._space_game_enemy_bullets:
-            shot["y"] += 3
-            if shot["y"] > 63:
-                continue
-            hit_ship = (shot["x"] >= sx0) and (shot["x"] <= sx0 + 10) and (shot["y"] >= sy0) and (shot["y"] <= sy0 + 4)
-            if hit_ship:
-                self._space_game_lives -= 1
-                self._space_game_hit_flash_until = time.ticks_add(now_ms, 180)
-                if self._space_game_lives <= 0:
-                    self._space_game_set_game_over()
-                    return
-                continue
-            remaining.append(shot)
-        self._space_game_enemy_bullets = remaining
-
-        any_alive = False
-        for enemy in self._space_game_enemies:
-            if enemy["alive"]:
-                any_alive = True
-                break
-        if not any_alive:
-            self._space_game_score += 100
-            self._space_game_wave += 1
-            self._space_game_wave_flash_until = time.ticks_add(now_ms, 850)
-            self._space_game_spawn_wave(now_ms)
-
-    def _draw_space_game(self):
-        if not self._space_game_active:
-            return False
-        now_ms = time.ticks_ms()
-        self._update_space_game(now_ms)
-        self._update_space_game_leds(now_ms)
-
-        self.display.fill(0)
-        self.display.rect(0, 0, 128, 64, 1)
-
-        score_txt = "S{}".format(self._space_game_score)
-        if len(score_txt) > 8:
-            score_txt = score_txt[-8:]
-        self.display.text(score_txt, 2, 2, 1)
-        self.display.text("W{}".format(self._space_game_wave), 48, 2, 1)
-        self.display.text("L{}".format(self._space_game_lives), 88, 2, 1)
-
-        if self._space_game_state == "game_over":
-            self.display.text("GAME OVER", 24, 22, 1)
-            self.display.text("SET=RETRY", 20, 34, 1)
-            self.display.text("HOLD UP EXIT", 12, 46, 1)
-            self.display.show()
-            return True
-
-        for enemy in self._space_game_enemies:
-            if enemy["alive"]:
-                self._draw_space_enemy_sprite(enemy["x"], enemy["y"], enemy.get("sprite", 0), self._space_game_enemy_flap_frame)
 
         if self._space_game_player_bullet is not None:
             self.display.fill_rect(self._space_game_player_bullet["x"], self._space_game_player_bullet["y"], 2, 4, 1)
