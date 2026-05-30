@@ -29,7 +29,8 @@ Main features:
 - One-tap "skip next alarm once"
 - Snooze support
 - Theme-based Retro (games) alarm playback (audio + display animation + LEDs)
-- OTA updates via browser
+- A tool to convert (small) gif images to bin files which can be used as a alarmclock animation.
+- - OTA updates via browser
 - Setup access point mode for first-time WiFi setup
 - Safe boot fallback to backup app after repeated boot failures
 
