@@ -327,6 +327,19 @@ After uploading custom `.bin` animations in **Animaties beheren**:
 
 This allows user-uploaded animations to use any preferred track and LED style.
 
+### Retro Facts
+
+When you stop the alarm, the clock can show a short retro-game fact on the display.
+
+How it works:
+
+1. The firmware fetches an on-this-day event from the Wikimedia feed.
+2. It only uses events that strongly match retro gaming or console history.
+3. If no strong match is found, it falls back to a built-in retro game fact.
+4. Long facts scroll vertically with a short pause before moving.
+
+The web UI also includes a **Retro Fact Test** card so you can test the online connection and preview the fetched fact without triggering the alarm.
+
 ### GIF to BIN Tool (How to Use)
 
 You can convert small GIF animations to the `.bin` format used by the clock.
