@@ -55,6 +55,53 @@
       margin: 20px 0;
     }
 
+    .postflash {
+      margin-top: 18px;
+      padding-top: 14px;
+      border-top: 1px solid #30363d;
+    }
+
+    .row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+      margin: 8px 0;
+    }
+
+    input, textarea, button {
+      font: inherit;
+    }
+
+    input {
+      background: #0f172a;
+      border: 1px solid #30363d;
+      color: var(--text);
+      border-radius: 8px;
+      padding: 8px 10px;
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 84px;
+      resize: vertical;
+      background: #0f172a;
+      border: 1px solid #30363d;
+      color: var(--text);
+      border-radius: 8px;
+      padding: 10px;
+      margin-top: 8px;
+    }
+
+    .copy-btn {
+      background: #2ea043;
+      border: 0;
+      color: #fff;
+      border-radius: 8px;
+      padding: 8px 12px;
+      cursor: pointer;
+    }
+
     code {
       background: #111827;
       border: 1px solid #30363d;
@@ -89,7 +136,51 @@
       </esp-web-install-button>
     </div>
 
+    <section class="postflash">
+      <h2 style="margin:0 0 6px 0;font-size:1.15rem">Step 2: Deploy App Files (One Command)</h2>
+      <p class="muted" style="margin:0 0 8px 0">
+        The installer above flashes MicroPython firmware only. Run this PowerShell command once to download and deploy app files.
+      </p>
+      <div class="row">
+        <label for="comPort">COM Port:</label>
+        <input id="comPort" type="text" value="COM7" style="width:110px">
+        <button id="copyDeployCmd" class="copy-btn" type="button">Copy Deploy Command</button>
+      </div>
+      <textarea id="deployCommand" readonly></textarea>
+      <p id="copyState" class="muted" style="margin:6px 0 0 0"></p>
+    </section>
+
     <p class="muted">Firmware manifest: <code>web-installer/manifest.json</code></p>
   </main>
+
+  <script>
+    const comPortInput = document.getElementById('comPort');
+    const deployCommand = document.getElementById('deployCommand');
+    const copyBtn = document.getElementById('copyDeployCmd');
+    const copyState = document.getElementById('copyState');
+
+    function buildDeployCommand() {
+      const port = (comPortInput.value || 'COM7').trim() || 'COM7';
+      return "powershell -ExecutionPolicy Bypass -Command \"iwr https://raw.githubusercontent.com/sjorsansems/retro-alarm-clock/main/tools/deploy_web_installer.ps1 -OutFile deploy_alarmklok.ps1; ./deploy_alarmklok.ps1 -Port " + port + "\"";
+    }
+
+    function refreshDeployCommand() {
+      deployCommand.value = buildDeployCommand();
+    }
+
+    copyBtn.addEventListener('click', async () => {
+      refreshDeployCommand();
+      try {
+        await navigator.clipboard.writeText(deployCommand.value);
+        copyState.textContent = 'Deploy command copied. Paste into PowerShell.';
+      } catch (_err) {
+        deployCommand.select();
+        copyState.textContent = 'Clipboard blocked. Command selected, copy manually.';
+      }
+    });
+
+    comPortInput.addEventListener('input', refreshDeployCommand);
+    refreshDeployCommand();
+  </script>
 </body>
 </html>

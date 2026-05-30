@@ -136,7 +136,15 @@ Live installer URL for this project:
 Important:
 
 - Web Serial only works on secure pages (`https://`) in compatible browsers (Chrome/Edge).
-- This web installer flashes firmware only. App files are still deployed with `mpremote` or OTA.
+- This web installer flashes firmware only.
+
+After flashing, run one command in PowerShell to deploy app files:
+
+```powershell
+powershell -ExecutionPolicy Bypass -Command "iwr https://raw.githubusercontent.com/sjorsansems/retro-alarm-clock/main/tools/deploy_web_installer.ps1 -OutFile deploy_alarmklok.ps1; ./deploy_alarmklok.ps1 -Port COM7"
+```
+
+Change `COM7` if your device uses another port.
 
 ### 2. Clone the Project
 
