@@ -258,6 +258,89 @@ After repeated boot failures, it switches to backup mode automatically.
 - Theme mapping controls LED + animation style per alarm tone
 - Additional animation binaries (`.bin`) can be uploaded via web UI
 
+### DFPlayer MP3 File Order (Required)
+
+`0001.mp3` is the intro track and is included in this repository.
+
+For built-in alarm tones/animations, users should add their own files in this exact order:
+
+1. `0001.mp3` -> Intro (already in repo)
+2. `0002.mp3` -> Zelda
+3. `0003.mp3` -> Mario
+4. `0004.mp3` -> Synthwave
+5. `0005.mp3` -> Sonic
+6. `0006.mp3` -> Metroid
+7. `0007.mp3` -> Pokemon
+8. `0008.mp3` -> Tetris
+9. `0009.mp3` -> Moonstone
+10. `0010.mp3` -> Arcade
+11. `0011.mp3` -> DOOM
+12. `0012.mp3` -> Knight Rider
+13. `0013.mp3` -> Fire
+14. `0014.mp3` -> Heartbeat
+15. `0015.mp3` -> Matrix
+16. `0016.mp3` -> Pac-Man
+17. `0017.mp3` -> Pong
+18. `0018.mp3` -> Radar
+19. `0019.mp3` -> Skull
+20. `0020.mp3` -> Snake
+21. `0021.mp3` -> Space
+22. `0022.mp3` -> UFO
+23. `0023.mp3` -> Donkey
+
+Notes:
+
+- Use zero-padded names (`0002.mp3`, not `2.mp3`).
+- Place files in DFPlayer root.
+- Keep numbering stable after first setup.
+
+### Custom Uploads: Matching Music and Animations in Web UI
+
+After uploading custom `.bin` animations in **Animaties beheren**:
+
+1. Use the **Muziek** dropdown to choose the MP3 track mapping.
+2. Use the **LED** dropdown to choose the LED theme mapping.
+3. Click **Save** per animation.
+
+This allows user-uploaded animations to use any preferred track and LED style.
+
+### GIF to BIN Tool (How to Use)
+
+You can convert small GIF animations to the `.bin` format used by the clock.
+
+Requirements:
+
+- Python 3.10+
+- Pillow (`pip install pillow`)
+
+Converter script:
+
+- `tools/gif_to_frames.py`
+
+Example command:
+
+```bash
+python tools/gif_to_frames.py --input gif/mario.gif --output mario.bin --width 128 --height 64 --fps 12 --bin
+```
+
+Recommended settings:
+
+- Keep source GIF short (2-8 seconds)
+- Low frame rate (8-15 fps) to reduce file size
+- High contrast source for better 1-bit conversion quality
+
+Upload workflow:
+
+1. Open the clock web UI.
+2. Go to **Animaties beheren**.
+3. Upload your generated `.bin` file.
+4. Optionally map that animation to music/LED theme in the same UI.
+
+Notes:
+
+- Large `.bin` files may fail upload if free storage is low.
+- Use `/api/storage-info` (shown in UI) to check available upload space.
+
 See `MUSIC_GUIDE.md` for detailed music sourcing and preparation.
 
 ## Troubleshooting
