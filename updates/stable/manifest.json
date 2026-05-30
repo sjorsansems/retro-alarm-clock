@@ -1,7 +1,7 @@
 {
-  "version": "6.0.8",
+  "version": "6.1.0",
   "channel": "stable",
-  "notes": "Retro fact display duration is configurable from the web interface",
+  "notes": "DOS idle chaos mode with web test button and per-day frequency settings",
   "files": [
     {
       "path": "retro_georgy_alarm_klok_v6.py",

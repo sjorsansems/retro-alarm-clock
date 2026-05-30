@@ -135,10 +135,13 @@ UP_BUTTON_PIN = 12    # Touch12 / ADC2_1 — omgewisseld op verzoek
 DOWN_BUTTON_PIN = 13  # Touch13 / ADC2_2 — omgewisseld op verzoek
 SET_BUTTON_PIN = 14   # Touch14 / ADC2_3 — vrij
 DAY_KEYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
-APP_VERSION = "6.0.8"
+APP_VERSION = "6.1.0"
 DEFAULT_UPDATE_MANIFEST_URL = "https://sjorsansems.github.io/retro-alarm-clock/updates/stable/manifest.json"
 ANIMATIONS_DIR = "animations"
 DEFAULT_RETRO_FACT_DISPLAY_SECONDS = 10
+DEFAULT_DOS_IDLE_ENABLED = True
+DEFAULT_DOS_IDLE_TRIGGER_MINUTES = 6
+DEFAULT_DOS_IDLE_MAX_PER_DAY = 12
 RETRO_FACT_LIBRARY = [
     "1977: Atari released the VCS, later known as the Atari 2600",
     "1980: Pac-Man turned arcades into a global phenomenon",
@@ -182,6 +185,90 @@ RETRO_FACT_LIBRARY = [
     "2022: Atari 50 celebrated the long history of arcade and console gaming",
     "2023: The Legend of Zelda: Tears of the Kingdom became a major launch moment",
     "2024: Retro gaming kept thriving through remakes, minis, and indie tributes",
+]
+
+DOS_IDLE_SCENES = [
+    {
+        "concept": "grappig",
+        "lines": [
+            "C:\\> loading retro mode...",
+            "ERROR: coffee not found",
+            "Try again [Y/N]?",
+        ],
+        "footer": "C:\\>_",
+    },
+    {
+        "concept": "grappig",
+        "lines": [
+            "Error 274: keyboard not found",
+            "press F1 to continue",
+            "(F1 is also missing)",
+        ],
+        "footer": "C:\\> help",
+    },
+    {
+        "concept": "grappig",
+        "lines": [
+            "Not enough memory to run",
+            "Wolvenstein 3-D",
+            "Close 47 TSR programs",
+        ],
+        "footer": "MEM FREE: 12 KB",
+    },
+    {
+        "concept": "boot",
+        "lines": [
+            "Setup cannot install",
+            "MS-DOS 6.22 on your",
+            "computer",
+        ],
+        "footer": "Press F3 to reboot",
+    },
+    {
+        "concept": "boot",
+        "lines": [
+            "HIMEM.SYS loaded",
+            "EMM386 failed",
+            "Continuing anyway...",
+        ],
+        "footer": "C:\\> win /3",
+    },
+    {
+        "concept": "boot",
+        "lines": [
+            "A:\\ DRIVE ERROR",
+            "B:\\ DRIVE ERROR",
+            "C:\\ maybe OK",
+        ],
+        "footer": "Retry, Abort, Fail?",
+    },
+    {
+        "concept": "creepy",
+        "lines": [
+            "Virus detected in",
+            "clock.exe",
+            "Quarantine failed",
+        ],
+        "footer": "SCAN CODE: 0xDEAD",
+    },
+    {
+        "concept": "creepy",
+        "lines": [
+            "MEMORY MANAGER",
+            "NOT INSTALLED",
+            "SYSTEM UNSTABLE",
+        ],
+        "footer": "C:\\> _",
+    },
+    {
+        "concept": "creepy",
+        "lines": [
+            "SYSTEM HALTED",
+            "CLOCK CORE LOCKED",
+            "...just kidding",
+        ],
+        "footer": "Press any key",
+    },
 ]
 
 # Aantal MP3-nummers op de SD-kaart (lied 1 t/m N)
@@ -650,6 +737,9 @@ class App:
         self.update_manifest_url = DEFAULT_UPDATE_MANIFEST_URL
         self.update_check_interval_hours = 24
         self.retro_fact_display_seconds = DEFAULT_RETRO_FACT_DISPLAY_SECONDS
+        self.dos_idle_enabled = DEFAULT_DOS_IDLE_ENABLED
+        self.dos_idle_trigger_minutes = DEFAULT_DOS_IDLE_TRIGGER_MINUTES
+        self.dos_idle_max_per_day = DEFAULT_DOS_IDLE_MAX_PER_DAY
         self.setup_mode = False
         self.setup_reason = ""
         self.setup_ap_ssid = SETUP_AP_SSID
@@ -671,6 +761,13 @@ class App:
             )
             self.retro_fact_display_seconds = self._normalize_retro_fact_display_seconds(
                 self.config.get("retro_fact", "display_seconds", DEFAULT_RETRO_FACT_DISPLAY_SECONDS)
+            )
+            self.dos_idle_enabled = bool(self.config.get("dos_idle", "enabled", DEFAULT_DOS_IDLE_ENABLED))
+            self.dos_idle_trigger_minutes = self._normalize_dos_idle_trigger_minutes(
+                self.config.get("dos_idle", "trigger_minutes", DEFAULT_DOS_IDLE_TRIGGER_MINUTES)
+            )
+            self.dos_idle_max_per_day = self._normalize_dos_idle_max_per_day(
+                self.config.get("dos_idle", "max_per_day", DEFAULT_DOS_IDLE_MAX_PER_DAY)
             )
 
         self.clock = ClockCore(timezone)
@@ -765,6 +862,13 @@ class App:
         self._retro_fact_source = ""
         self._set_feedback_start_ms = 0
         self._retro_fact_until = 0
+        self._last_activity_ms = time.ticks_ms()
+        self._dos_idle_active_until = 0
+        self._dos_idle_next_scene_ms = 0
+        self._dos_idle_scene = None
+        self._dos_idle_scene_cursor = True
+        self._dos_idle_day_key = ""
+        self._dos_idle_shown_today = 0
         self._easter_active_until = None
         self._easter_message = ""
         self._easter_key = None
@@ -948,6 +1052,129 @@ class App:
         if n > 60:
             return 60
         return n
+
+    def _normalize_dos_idle_trigger_minutes(self, value):
+        try:
+            n = int(value)
+        except Exception:
+            return DEFAULT_DOS_IDLE_TRIGGER_MINUTES
+        if n < 1:
+            return 1
+        if n > 120:
+            return 120
+        return n
+
+    def _normalize_dos_idle_max_per_day(self, value):
+        try:
+            n = int(value)
+        except Exception:
+            return DEFAULT_DOS_IDLE_MAX_PER_DAY
+        if n < 0:
+            return 0
+        if n > 200:
+            return 200
+        return n
+
+    def _mark_activity(self):
+        self._last_activity_ms = time.ticks_ms()
+        if self._dos_idle_active_until:
+            self._dos_idle_active_until = 0
+            self._dos_idle_scene = None
+
+    def _current_day_key(self):
+        t = self.clock.read_time()
+        return "{:04d}-{:02d}-{:02d}".format(int(t[0]), int(t[1]), int(t[2]))
+
+    def _roll_dos_idle_day(self):
+        day_key = self._current_day_key()
+        if self._dos_idle_day_key != day_key:
+            self._dos_idle_day_key = day_key
+            self._dos_idle_shown_today = 0
+
+    def _pick_dos_idle_scene(self):
+        if not DOS_IDLE_SCENES:
+            return None
+        base = int(time.ticks_ms()) + (self._dos_idle_shown_today * 17)
+        idx = base % len(DOS_IDLE_SCENES)
+        scene = DOS_IDLE_SCENES[idx]
+        if scene.get("concept") == "creepy":
+            # Creepy mode komt minder vaak voor dan grappig/boot.
+            if (base // 7) % 3 != 0:
+                idx = (idx + 1) % len(DOS_IDLE_SCENES)
+                scene = DOS_IDLE_SCENES[idx]
+        return scene
+
+    def _advance_dos_idle_scene(self, now_ms, force=False):
+        if (not force) and self._dos_idle_next_scene_ms and time.ticks_diff(now_ms, self._dos_idle_next_scene_ms) < 0:
+            return
+        self._dos_idle_scene = self._pick_dos_idle_scene()
+        self._dos_idle_scene_cursor = ((now_ms // 280) % 2) == 0
+        self._dos_idle_next_scene_ms = time.ticks_add(now_ms, 1700 + ((now_ms // 11) % 1800))
+
+    def _start_dos_idle(self, manual=False):
+        self._roll_dos_idle_day()
+        if not manual:
+            if not self.dos_idle_enabled:
+                return False
+            if self.dos_idle_max_per_day > 0 and self._dos_idle_shown_today >= self.dos_idle_max_per_day:
+                return False
+            self._dos_idle_shown_today += 1
+
+        now_ms = time.ticks_ms()
+        self._dos_idle_active_until = time.ticks_add(now_ms, 12000)
+        self._dos_idle_next_scene_ms = 0
+        self._dos_idle_scene = None
+        self._advance_dos_idle_scene(now_ms, force=True)
+        return True
+
+    def _check_dos_idle(self):
+        self._roll_dos_idle_day()
+        if self._dos_idle_active_until:
+            return
+        if not self.dos_idle_enabled:
+            return
+        if self.setup_mode or self.alarm_edit_mode:
+            return
+        if self.alarm_until is not None or self.snooze_until is not None:
+            return
+        if self._set_feedback_until and time.ticks_diff(self._set_feedback_until, time.ticks_ms()) > 0:
+            return
+
+        idle_ms = self.dos_idle_trigger_minutes * 60 * 1000
+        if time.ticks_diff(time.ticks_ms(), self._last_activity_ms) < idle_ms:
+            return
+        self._start_dos_idle(manual=False)
+
+    def _draw_dos_idle(self):
+        now_ms = time.ticks_ms()
+        if not self._dos_idle_active_until:
+            return False
+        if time.ticks_diff(self._dos_idle_active_until, now_ms) <= 0:
+            self._dos_idle_active_until = 0
+            self._dos_idle_scene = None
+            return False
+
+        self._advance_dos_idle_scene(now_ms)
+        scene = self._dos_idle_scene or {"lines": ["C:\\>", "idle", "..."], "footer": "C:\\>_"}
+        lines = scene.get("lines", [])
+        footer = str(scene.get("footer", "C:\\>"))
+        blink = ((now_ms // 300) % 2) == 0
+
+        self.display.fill(0)
+        self.display.rect(0, 0, 128, 64, 1)
+        self.display.text("RETRO DOS", 2, 2, 1)
+        self.display.text("C:\\>", 2, 12, 1)
+        if blink:
+            self.display.fill_rect(34, 19, 4, 1, 1)
+
+        y = 24
+        for line in lines[:3]:
+            self.display.text(str(line)[:20], 2, y, 1)
+            y += 10
+
+        self.display.text(footer[:20], 2, 56, 1)
+        self.display.show()
+        return True
 
     def _normalize_manifest_url(self, value):
         raw = str(value or "").strip()
@@ -2049,10 +2276,12 @@ class App:
             if s["pending"] == "short":
                 s["pending"] = None
                 if short_cb:
+                    self._mark_activity()
                     short_cb()
             elif s["pending"] == "long":
                 s["pending"] = None
                 if long_cb:
+                    self._mark_activity()
                     long_cb()
 
             # Lange druk detectie terwijl knop ingehouden (alleen voor knoppen met long_cb)
@@ -2060,6 +2289,7 @@ class App:
                 if s["start"] > 0 and time.ticks_diff(now, s["start"]) >= long_ms:
                     s["fired_long"] = True
                     s["pending"] = None  # annuleer eventuele short
+                    self._mark_activity()
                     long_cb()
 
     def _normalize_tone_key(self, tone):
@@ -4757,6 +4987,9 @@ class App:
         method = parts_l[0] if len(parts_l) > 0 else ""
         path = parts_l[1] if len(parts_l) > 1 else ""
         path_no_query = path.split("?", 1)[0]
+        if method:
+            # Elke webactie telt als user activity, zodat idle-screensaver niet blijft overtekenen.
+            self._mark_activity()
         # Upload endpoints: stream data naar bestand (omzeilt body-buffer limiet)
         if method == "POST" and path_no_query == "/api/upload-bin":
             self._handle_upload_bin(c, headers_raw, body_start, path)
@@ -4788,6 +5021,7 @@ class App:
             gc.collect()
             return
         if method == "GET" and path == "/api/time":
+            self._roll_dos_idle_day()
             t = self.clock.read_time()
             c.send(self._json({
                 "year": t[0], "month": t[1], "day": t[2],
@@ -4825,6 +5059,10 @@ class App:
                 "update_manifest_url": self.update_manifest_url,
                 "update_check_interval_hours": self.update_check_interval_hours,
                 "retro_fact_display_seconds": self.retro_fact_display_seconds,
+                "dos_idle_enabled": self.dos_idle_enabled,
+                "dos_idle_trigger_minutes": self.dos_idle_trigger_minutes,
+                "dos_idle_max_per_day": self.dos_idle_max_per_day,
+                "dos_idle_shown_today": self._dos_idle_shown_today,
                 "update_last_status": self._update_last_status,
                 "update_last_error": self._update_last_error
             }))
@@ -4955,6 +5193,27 @@ class App:
             c.send(self._json({
                 "ok": True,
                 "retro_fact_display_seconds": self.retro_fact_display_seconds,
+            }))
+            return
+        if method == "POST" and path == "/api/set-dos-idle-settings":
+            d = self._parse(req)
+            self.dos_idle_enabled = bool(d.get("enabled", self.dos_idle_enabled))
+            self.dos_idle_trigger_minutes = self._normalize_dos_idle_trigger_minutes(
+                d.get("trigger_minutes", self.dos_idle_trigger_minutes)
+            )
+            self.dos_idle_max_per_day = self._normalize_dos_idle_max_per_day(
+                d.get("max_per_day", self.dos_idle_max_per_day)
+            )
+            if self.config:
+                self.config.set("dos_idle", "enabled", self.dos_idle_enabled)
+                self.config.set("dos_idle", "trigger_minutes", self.dos_idle_trigger_minutes)
+                self.config.set("dos_idle", "max_per_day", self.dos_idle_max_per_day)
+            c.send(self._json({
+                "ok": True,
+                "dos_idle_enabled": self.dos_idle_enabled,
+                "dos_idle_trigger_minutes": self.dos_idle_trigger_minutes,
+                "dos_idle_max_per_day": self.dos_idle_max_per_day,
+                "dos_idle_shown_today": self._dos_idle_shown_today,
             }))
             return
         if method == "POST" and path == "/api/set-wifi-credentials":
@@ -5151,6 +5410,22 @@ class App:
             except Exception as e:
                 c.send(self._json({"ok": False, "error": str(e)}))
             return
+        if method == "POST" and path == "/api/test-dos-idle":
+            try:
+                if self.alarm_until is not None:
+                    c.send(self._json({"ok": False, "error": "Alarm is actief"}))
+                elif self.setup_mode:
+                    c.send(self._json({"ok": False, "error": "Setup modus actief"}))
+                else:
+                    ok = self._start_dos_idle(manual=True)
+                    c.send(self._json({
+                        "ok": bool(ok),
+                        "status": "ok" if ok else "busy",
+                        "shown_today": self._dos_idle_shown_today,
+                    }))
+            except Exception as e:
+                c.send(self._json({"ok": False, "error": str(e)}))
+            return
         if method == "POST" and path == "/api/set-track-label":
             d = self._parse(req)
             track = str(d.get("track", "") or "").strip()
@@ -5259,6 +5534,7 @@ class App:
                 self._handle_wifi_state()
                 self._check_weather_fetch()
                 self._check_auto_update()
+                self._check_dos_idle()
 
                 if self.sock:
                     try:
@@ -5310,6 +5586,8 @@ class App:
                         self._draw_alarm_edit()
                     elif self.startup_ip_until is not None and time.ticks_diff(self.startup_ip_until, time.ticks_ms()) > 0:
                         self._draw_startup_ip()
+                    elif self._draw_dos_idle():
+                        pass
                     else:
                         if self.startup_ip_until is not None:
                             # IP-scherm loopt af → transitie starten naar klokscherm (met LEDs)

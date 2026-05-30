@@ -359,6 +359,35 @@ code{background:#15112a;border:1px solid #4d4175;padding:1px 5px;border-radius:0
     <div id="retroFactStatusLine" class="tiny" style="margin-top:8px">Retro fact status: -</div>
     <div id="retroFactPreview" class="status" style="margin-top:10px;white-space:pre-wrap;min-height:52px">Nog geen fact getest</div>
   </div>
+
+  <div class="card">
+    <h3>&#128187; DOS Idle Chaos</h3>
+    <p style="font-size:13px;color:var(--muted);margin:0 0 10px">
+      Laat de klok in idle-modus DOS-achtige chaos tonen met random foutschermen (grappig, boot, creepy).
+    </p>
+    <div class="grid" style="margin-bottom:10px">
+      <div>
+        <label for="dosIdleEnabledInput">Inschakelen</label>
+        <select id="dosIdleEnabledInput">
+          <option value="1">Ja</option>
+          <option value="0">Nee</option>
+        </select>
+      </div>
+      <div>
+        <label for="dosIdleTriggerInput">Idle na (minuten)</label>
+        <input id="dosIdleTriggerInput" type="number" min="1" max="120" value="6">
+      </div>
+      <div>
+        <label for="dosIdleMaxPerDayInput">Max per dag</label>
+        <input id="dosIdleMaxPerDayInput" type="number" min="0" max="200" value="12">
+      </div>
+    </div>
+    <div class="row">
+      <button onclick="saveDosIdleSettings()">DOS idle instellingen opslaan</button>
+      <button class="alt" onclick="testDosIdleNow()">Test DOS chaos</button>
+    </div>
+    <div id="dosIdleStatusLine" class="tiny" style="margin-top:8px">DOS idle status: -</div>
+  </div>
 </div>
 
 <script>
@@ -881,6 +910,13 @@ async function refresh(){
       document.getElementById('updateIntervalInput').value=data.update_check_interval_hours??24
       document.getElementById('updateManifestInput').value=data.update_manifest_url||''
       document.getElementById('retroFactSecondsInput').value=data.retro_fact_display_seconds||10
+      document.getElementById('dosIdleEnabledInput').value=data.dos_idle_enabled?'1':'0'
+      document.getElementById('dosIdleTriggerInput').value=data.dos_idle_trigger_minutes??6
+      document.getElementById('dosIdleMaxPerDayInput').value=data.dos_idle_max_per_day??12
+      const dosStatus=document.getElementById('dosIdleStatusLine')
+      if(dosStatus){
+        dosStatus.textContent=`DOS idle status: vandaag ${data.dos_idle_shown_today??0}/${data.dos_idle_max_per_day??12}`
+      }
       renderSchedule(data.alarm_schedule||{},data.alarm_tones||[],data.alarm_combo||{},data.alarm_gif_combo||{})
     }
     setStatus(tr('connected'),false)
@@ -992,6 +1028,38 @@ async function saveRetroFactSettings(){
   }
   editingUntil=0
   refresh()
+}
+
+async function saveDosIdleSettings(){
+  markEditing()
+  const out=await apiPost('/api/set-dos-idle-settings',{
+    enabled:document.getElementById('dosIdleEnabledInput').value==='1',
+    trigger_minutes:Number(document.getElementById('dosIdleTriggerInput').value||6),
+    max_per_day:Number(document.getElementById('dosIdleMaxPerDayInput').value||12)
+  })
+  const line=document.getElementById('dosIdleStatusLine')
+  if(out.ok){
+    if(line)line.textContent=`DOS idle status: vandaag ${out.dos_idle_shown_today??0}/${out.dos_idle_max_per_day??12}`
+    setStatus('DOS idle instellingen opgeslagen',false)
+  }else{
+    if(line)line.textContent='DOS idle status: fout bij opslaan'
+    setStatus(out.error||'DOS idle instellingen opslaan mislukt',true)
+  }
+  editingUntil=0
+  refresh()
+}
+
+async function testDosIdleNow(){
+  const line=document.getElementById('dosIdleStatusLine')
+  if(line)line.textContent='DOS idle status: test gestart...'
+  const out=await apiPost('/api/test-dos-idle',{})
+  if(out.ok){
+    if(line)line.textContent='DOS idle status: test actief op scherm'
+    setStatus('DOS idle test gestart',false)
+  }else{
+    if(line)line.textContent='DOS idle status: '+(out.error||'mislukt')
+    setStatus(out.error||'DOS idle test mislukt',true)
+  }
 }
 
 async function checkUpdatesNow(){
@@ -1345,7 +1413,7 @@ async function saveTrackLabel(track){
   }
 }
 
-['timeInput','secInput','timezoneInput','languageInput','testAnimationInput','volumeInput','testSecondsInput','weatherPlaceInput','weatherUpdatesInput','wifiKeepAliveInput','wifiSsidInput','wifiPasswordInput','updateAutoInput','updateIntervalInput','updateManifestInput','retroFactSecondsInput'].forEach(bindEditor)
+['timeInput','secInput','timezoneInput','languageInput','testAnimationInput','volumeInput','testSecondsInput','weatherPlaceInput','weatherUpdatesInput','wifiKeepAliveInput','wifiSsidInput','wifiPasswordInput','updateAutoInput','updateIntervalInput','updateManifestInput','retroFactSecondsInput','dosIdleEnabledInput','dosIdleTriggerInput','dosIdleMaxPerDayInput'].forEach(bindEditor)
 document.getElementById('testAnimationInput').addEventListener('change',updateToneScheme)
 populateTimezones('Europe/Amsterdam')
 applyLanguage('nl')
