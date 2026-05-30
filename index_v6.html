@@ -328,7 +328,7 @@ code{background:#15112a;border:1px solid #4d4175;padding:1px 5px;border-radius:0
   <div class="card">
     <h3>&#127918; Retro Fact Test</h3>
     <p style="font-size:13px;color:var(--muted);margin:0 0 10px">
-      Test de lokale retro-fact zonder het alarm af te laten gaan.
+      Test de lokale retro-fact en toon hem 10 seconden op het scherm zonder het alarm af te laten gaan.
     </p>
     <div class="row">
       <button class="alt" onclick="testRetroFactNow()">Test retro fact</button>
@@ -987,7 +987,7 @@ async function testRetroFactNow(){
   if(preview)preview.textContent='Fact ophalen...'
   const out=await apiPost('/api/test-retro-fact',{})
   if(out.ok){
-    if(status)status.textContent='Retro fact status: OK | bron: '+(out.source||'-')
+    if(status)status.textContent='Retro fact status: OK | bron: '+(out.source||'-')+' | 10 sec op scherm'
     if(preview)preview.textContent=out.fact||'-'
   }else{
     if(status)status.textContent='Retro fact status: error | '+(out.error||'onbekend')

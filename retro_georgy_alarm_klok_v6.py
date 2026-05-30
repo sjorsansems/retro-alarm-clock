@@ -135,7 +135,7 @@ UP_BUTTON_PIN = 12    # Touch12 / ADC2_1 — omgewisseld op verzoek
 DOWN_BUTTON_PIN = 13  # Touch13 / ADC2_2 — omgewisseld op verzoek
 SET_BUTTON_PIN = 14   # Touch14 / ADC2_3 — vrij
 DAY_KEYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
-APP_VERSION = "6.0.4"
+APP_VERSION = "6.0.5"
 DEFAULT_UPDATE_MANIFEST_URL = "https://sjorsansems.github.io/retro-alarm-clock/updates/stable/manifest.json"
 ANIMATIONS_DIR = "animations"
 RETRO_FACT_LIBRARY = [
@@ -1648,6 +1648,7 @@ class App:
         self._set_feedback_start_ms = time.ticks_ms()
         self._set_feedback_until = time.ticks_add(time.ticks_ms(), 10000)
         print("Retro fact:", fact)
+        return fact, source
 
     def _get_retro_fact_preview(self):
         fact, source = self._fetch_retro_game_fact()
@@ -5100,8 +5101,18 @@ class App:
             return
         if method == "POST" and path == "/api/test-retro-fact":
             try:
-                payload = self._get_retro_fact_preview()
-                c.send(self._json(payload))
+                if self.alarm_until is not None:
+                    c.send(self._json({"ok": False, "error": "Alarm is actief"}))
+                else:
+                    fact, source = self._show_retro_fact()
+                    c.send(self._json({
+                        "ok": True,
+                        "fact": fact,
+                        "source": source,
+                        "mode": "manual",
+                        "status": "ok",
+                        "display_ms": 10000,
+                    }))
             except Exception as e:
                 c.send(self._json({"ok": False, "error": str(e)}))
             return

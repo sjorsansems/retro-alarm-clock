@@ -338,7 +338,7 @@ How it works:
 3. The fact is deterministic per day, so the same date shows the same retro fact.
 4. Long facts scroll vertically with a short pause before moving.
 
-The web UI also includes a **Retro Fact Test** card so you can preview the local fact without triggering the alarm.
+The web UI also includes a **Retro Fact Test** card so you can preview the local fact on the device for 10 seconds without triggering the alarm.
 
 ### GIF to BIN Tool (How to Use)
 

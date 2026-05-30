@@ -1,7 +1,7 @@
 {
-  "version": "6.0.4",
+  "version": "6.0.5",
   "channel": "stable",
-  "notes": "Offline retro fact library with local date-based test card",
+  "notes": "Offline retro fact library; test card shows the fact on screen for 10 seconds",
   "files": [
     {
       "path": "retro_georgy_alarm_klok_v6.py",
