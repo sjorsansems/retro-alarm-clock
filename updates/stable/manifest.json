@@ -1,12 +1,6 @@
 {
   "version": "6.0.1",
   "channel": "stable",
-  "notes": "Small test update payload to verify OTA update flow",
-  "files": [
-    {
-      "path": "test_update.txt",
-      "url": "https://raw.githubusercontent.com/sjorsansems/retro-alarm-clock/main/updates/stable/test_update.txt",
-      "sha256": "afe1f6aa3d0c111666338fd98f5d1b85e5da67f0fa5342f3657030df7f2d6b27"
-    }
-  ]
+  "notes": "Stable baseline after 6.0.1 release",
+  "files": []
 }

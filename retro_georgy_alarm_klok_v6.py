@@ -135,7 +135,7 @@ UP_BUTTON_PIN = 12    # Touch12 / ADC2_1 — omgewisseld op verzoek
 DOWN_BUTTON_PIN = 13  # Touch13 / ADC2_2 — omgewisseld op verzoek
 SET_BUTTON_PIN = 14   # Touch14 / ADC2_3 — vrij
 DAY_KEYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
-APP_VERSION = "6.0.0"
+APP_VERSION = "6.0.1"
 DEFAULT_UPDATE_MANIFEST_URL = "https://sjorsansems.github.io/retro-alarm-clock/updates/stable/manifest.json"
 
 # Aantal MP3-nummers op de SD-kaart (lied 1 t/m N)
