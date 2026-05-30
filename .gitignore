@@ -2,6 +2,9 @@ __pycache__/
 *.pyc
 archive/
 firmware/
+!firmware/
+firmware/*
+!firmware/ESP32_GENERIC_S3-SPIRAM_OCT-20260406-v1.28.0.bin
 .vscode/
 config.json
 *.local.json
