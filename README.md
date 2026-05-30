@@ -10,6 +10,7 @@
 
 		  8-BIT OLED ANIMATIONS  +  MP3 ALARM MUSIC  +  WS2812 LED THEMES
 ```
+<img width="3072" height="4096" alt="IMG_20260530_151650277" src="https://github.com/user-attachments/assets/028d6e9a-1a46-4c03-b423-da7320406590" />
 
 An ESP32-S3 retro alarm clock project with:
 - SH1106 OLED 128x64 display and pixel animations
