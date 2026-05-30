@@ -211,6 +211,8 @@ You can configure:
 - WiFi behavior and setup credentials
 - OTA file uploads
 - GitHub Pages update checks and installs
+- Retro Fact display duration and quick test
+- DOS Idle Chaos screensaver behavior and daily limit
 
 ## Automatic Updates via GitHub Pages
 
@@ -248,6 +250,7 @@ Use the web UI card **GitHub Auto-Update** to:
 - Set check interval (hours)
 - Change manifest URL
 - Run manual check/install
+- See an install progress bar while update is running
 
 ## User Guide (Buttons)
 
@@ -338,7 +341,34 @@ How it works:
 3. The fact is deterministic per day, so the same date shows the same retro fact.
 4. Long facts scroll vertically with a short pause before moving.
 
-The web UI also includes a **Retro Fact Test** card so you can preview the local fact on the device for 10 seconds without triggering the alarm.
+The web UI also includes a **Retro Fact Test** card so you can:
+
+1. Set how many seconds the fact stays on screen.
+2. Use the same duration for both manual test and normal alarm-stop flow.
+3. Preview the local fact without triggering the alarm.
+
+### DOS Idle Chaos
+
+The clock now supports a DOS-style idle screensaver with random retro error scenes.
+
+Included concepts:
+
+1. Funny/absurd prompts
+2. DOS/boot-style setup failures
+3. Creepy virus-style warnings
+
+How it behaves:
+
+1. It triggers after configurable idle minutes.
+2. Scenes switch every few seconds to look unstable.
+3. A per-day maximum controls how often it can appear.
+4. You can trigger it manually via **Test DOS chaos** in the web UI.
+
+Related files:
+
+- `create_dos_animation.py` (generator script)
+- `animations/dos_meltdown.gif`
+- `animations/dos_meltdown.bin`
 
 ### GIF to BIN Tool (How to Use)
 

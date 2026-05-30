@@ -1,7 +1,7 @@
 {
-  "version": "6.1.0",
+  "version": "6.1.1",
   "channel": "stable",
-  "notes": "DOS idle chaos mode with web test button and per-day frequency settings",
+  "notes": "README updated with update progress, Retro Fact duration, and DOS Idle Chaos docs",
   "files": [
     {
       "path": "retro_georgy_alarm_klok_v6.py",
