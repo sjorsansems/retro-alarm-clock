@@ -33,9 +33,10 @@ Main features:
 - Snooze support
 - Theme-based Retro (games) alarm playback (audio + display animation + LEDs)
 - A tool to convert (small) gif images to bin files which can be used as a alarmclock animation.
-- - OTA updates via browser
+- OTA updates via browser
 - Setup access point mode for first-time WiFi setup
 - Safe boot fallback to backup app after repeated boot failures
+- Built-in Phoenix-style mini Space Game (3-button controls + optional game music)
 
 ## Demo Video
 
@@ -80,7 +81,7 @@ You can slice and print these parts to build the physical case.
 | DFPlayer TX (ESP->DF RX) | GPIO17 | Use 1k series resistor |
 | DFPlayer RX (ESP<-DF TX) | GPIO18 | Direct is fine |
 | WS2812 Data | GPIO2 | GRB byte order |
-| Button UP | GPIO12 | Short press: nightlight toggle |
+| Button UP | GPIO12 | Short: nightlight toggle, Long (3s): start Space Game |
 | Button DOWN | GPIO13 | Short: OLED mode, Long: WiFi toggle |
 | Button SET | GPIO14 | Short: skip next alarm once, Long: alarm edit |
 
@@ -213,6 +214,7 @@ You can configure:
 - GitHub Pages update checks and installs
 - Retro Fact display duration and quick test
 - DOS Idle Chaos screensaver behavior and daily limit
+- Space Game music selection and quick start from web UI
 
 ## Automatic Updates via GitHub Pages
 
@@ -256,6 +258,7 @@ Use the web UI card **GitHub Auto-Update** to:
 
 Normal clock screen:
 - `UP` short press -> Nightlight ON/OFF
+- `UP` long press (3s) -> Start Space Game
 - `DOWN` short press -> Cycle OLED brightness modes
 - `DOWN` long press -> WiFi ON/OFF
 - `SET` short press -> Skip next scheduled alarm once
@@ -264,6 +267,12 @@ Normal clock screen:
 During alarm:
 - `SET` -> Stop alarm
 - `DOWN` -> Snooze (10 minutes)
+
+During Space Game (Phoenix-style):
+- `SET` (left/alarm button) -> Move ship left
+- `UP` (middle/nightlight button) -> Shoot
+- `DOWN` (right/dim button) -> Move ship right
+- `UP` long press (3s) -> Exit game
 
 Alarm edit mode:
 - `UP` -> Hour +1
@@ -369,6 +378,36 @@ Related files:
 - `create_dos_animation.py` (generator script)
 - `animations/dos_meltdown.gif`
 - `animations/dos_meltdown.bin`
+
+### Space Game (Phoenix-style)
+
+The clock now includes a compact Space Game inspired by classic fixed-shooter gameplay.
+
+Implemented gameplay set:
+
+1. Four classic bird-like enemy sprite variants with 2-frame flap animation.
+2. Per-wave behavior patterns (march, zig-zag, and dive waves).
+3. Phoenix-style cadence and tempo scaling (enemy step speed + shot burst pressure increase per wave).
+4. LED strip rhythm mapped to gameplay phase (different color pulse profiles, hit flash, shot flash, wave-clear pulse).
+5. Bonus mothership phase every 5th wave with its own HP bar and attack pattern.
+
+How to start:
+
+1. Hold the middle nightlight button (`UP`) for 3 seconds.
+2. Or press **Start Space game nu** in the web UI.
+
+Controls:
+
+1. Left button (`SET`) moves left.
+2. Middle button (`UP`) shoots.
+3. Right button (`DOWN`) moves right.
+4. Hold middle (`UP`) for 3 seconds to exit.
+
+Web UI settings:
+
+1. Use the **Space Game (Phoenix-style)** card.
+2. Select game music in the dropdown (same track label style used in **Animaties beheren**).
+3. Save with **Space game instellingen opslaan**.
 
 ### GIF to BIN Tool (How to Use)
 

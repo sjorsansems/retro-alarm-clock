@@ -388,6 +388,27 @@ code{background:#15112a;border:1px solid #4d4175;padding:1px 5px;border-radius:0
     </div>
     <div id="dosIdleStatusLine" class="tiny" style="margin-top:8px">DOS idle status: -</div>
   </div>
+
+  <div class="card">
+    <h3>&#128126; Space Game (Phoenix-style)</h3>
+    <p style="font-size:13px;color:var(--muted);margin:0 0 10px">
+      Controls op hardware: links (alarmknop) = naar links, midden (nachtlamp) = schieten, rechts (dim) = naar rechts. Start met midden 3s ingedrukt, en verlaat met midden 3s tijdens de game.
+    </p>
+    <div class="grid" style="margin-bottom:10px">
+      <div>
+        <label for="spaceGameMusicInput">Game muziek</label>
+        <select id="spaceGameMusicInput"></select>
+      </div>
+      <div style="display:flex;align-items:flex-end">
+        <button onclick="saveSpaceGameSettings()">Space game instellingen opslaan</button>
+      </div>
+    </div>
+    <div class="row">
+      <button class="alt" onclick="testSpaceGameNow()">Start Space game nu</button>
+      <button class="ghost" onclick="refresh()">Status verversen</button>
+    </div>
+    <div id="spaceGameStatusLine" class="tiny" style="margin-top:8px">Space game status: -</div>
+  </div>
 </div>
 
 <script>
@@ -732,6 +753,19 @@ function buildTestAnimationOptions(toneOptions){
     .join('')
 }
 
+function renderSpaceGameMusicOptions(toneOptions, selected){
+  const sel=document.getElementById('spaceGameMusicInput')
+  if(!sel)return
+  const options=['<option value="0">Uit (geen muziek)</option>']
+  ;(toneOptions||[]).forEach(t=>{
+    options.push(`<option value="${t.key}">${toneOptionLabel(t)}</option>`)
+  })
+  sel.innerHTML=options.join('')
+  const target=(selected===undefined||selected===null)?'0':String(selected)
+  sel.value=target
+  if(sel.value!==target)sel.value='0'
+}
+
 function uiToneToInternalTone(uiTone){
   const n=Number(uiTone)
   if(!Number.isFinite(n))return '1'
@@ -874,6 +908,7 @@ async function refresh(){
     renderUpdateStatus(data)
     renderTestAnimations(data.alarm_tones||[])
     if(data.alarm_tones)cachedAlarmTones=data.alarm_tones
+    renderSpaceGameMusicOptions(data.alarm_tones||[], data.space_game_music_tone)
     
     // Zet toneMap EERST
     const newSignature=JSON.stringify(data.alarm_tones||[])
@@ -916,6 +951,14 @@ async function refresh(){
       const dosStatus=document.getElementById('dosIdleStatusLine')
       if(dosStatus){
         dosStatus.textContent=`DOS idle status: vandaag ${data.dos_idle_shown_today??0}/${data.dos_idle_max_per_day??12}`
+      }
+      const spaceStatus=document.getElementById('spaceGameStatusLine')
+      if(spaceStatus){
+        const active=!!data.space_game_active
+        const state=data.space_game_state||'-'
+        const score=Number(data.space_game_score||0)
+        const high=Number(data.space_game_high_score||0)
+        spaceStatus.textContent=`Space game status: ${active?'actief':'idle'} | state: ${state} | score: ${score} | high: ${high}`
       }
       renderSchedule(data.alarm_schedule||{},data.alarm_tones||[],data.alarm_combo||{},data.alarm_gif_combo||{})
     }
@@ -1059,6 +1102,33 @@ async function testDosIdleNow(){
   }else{
     if(line)line.textContent='DOS idle status: '+(out.error||'mislukt')
     setStatus(out.error||'DOS idle test mislukt',true)
+  }
+}
+
+async function saveSpaceGameSettings(){
+  markEditing()
+  const out=await apiPost('/api/set-space-game-settings',{
+    music_tone:document.getElementById('spaceGameMusicInput').value
+  })
+  if(out.ok){
+    setStatus('Space game instellingen opgeslagen',false)
+  }else{
+    setStatus(out.error||'Space game instellingen opslaan mislukt',true)
+  }
+  editingUntil=0
+  refresh()
+}
+
+async function testSpaceGameNow(){
+  const line=document.getElementById('spaceGameStatusLine')
+  if(line)line.textContent='Space game status: starten...'
+  const out=await apiPost('/api/test-space-game',{})
+  if(out.ok){
+    if(line)line.textContent='Space game status: actief op scherm'
+    setStatus('Space game gestart',false)
+  }else{
+    if(line)line.textContent='Space game status: '+(out.error||'mislukt')
+    setStatus(out.error||'Space game starten mislukt',true)
   }
 }
 
@@ -1413,7 +1483,7 @@ async function saveTrackLabel(track){
   }
 }
 
-['timeInput','secInput','timezoneInput','languageInput','testAnimationInput','volumeInput','testSecondsInput','weatherPlaceInput','weatherUpdatesInput','wifiKeepAliveInput','wifiSsidInput','wifiPasswordInput','updateAutoInput','updateIntervalInput','updateManifestInput','retroFactSecondsInput','dosIdleEnabledInput','dosIdleTriggerInput','dosIdleMaxPerDayInput'].forEach(bindEditor)
+['timeInput','secInput','timezoneInput','languageInput','testAnimationInput','volumeInput','testSecondsInput','weatherPlaceInput','weatherUpdatesInput','wifiKeepAliveInput','wifiSsidInput','wifiPasswordInput','updateAutoInput','updateIntervalInput','updateManifestInput','retroFactSecondsInput','dosIdleEnabledInput','dosIdleTriggerInput','dosIdleMaxPerDayInput','spaceGameMusicInput'].forEach(bindEditor)
 document.getElementById('testAnimationInput').addEventListener('change',updateToneScheme)
 populateTimezones('Europe/Amsterdam')
 applyLanguage('nl')
