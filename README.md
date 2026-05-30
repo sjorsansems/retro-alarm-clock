@@ -12,9 +12,9 @@
 ```
 
 An ESP32-S3 retro alarm clock project with:
-- SH1106 OLED display and pixel animations
+- SH1106 OLED 128x64 display and pixel animations
 - DFPlayer Mini MP3 alarm playback
-- WS2812 LED strip effects per alarm theme
+- WS2812 LED strip  (8 leds) effects per alarm theme
 - DS3231 RTC support (with optional EEPROM schedule storage)
 - WiFi time sync (NTP), weather data, and web configuration UI
 - Setup AP fallback (`AlarmKlok-Setup`) when WiFi is not configured/reachable
@@ -28,14 +28,14 @@ Main features:
 - Weekly alarm scheduling
 - One-tap "skip next alarm once"
 - Snooze support
-- Theme-based alarm playback (audio + display animation + LEDs)
+- Theme-based Retro (games) alarm playback (audio + display animation + LEDs)
 - OTA updates via browser
 - Setup access point mode for first-time WiFi setup
 - Safe boot fallback to backup app after repeated boot failures
 
 ## Hardware Requirements
 
-- 1x ESP32-S3 DevKitC-1 (or compatible ESP32-S3 board)
+- 1x ESP32-S3 DevKitC-1 -> I used a N16R8, other models not tested. Enough Ram is mandantory. 
 - 1x SH1106 OLED display (128x64, I2C)
 - 1x DS3231 RTC module (I2C)
 - Optional: AT24C32 EEPROM on RTC board (for schedule persistence)
@@ -117,7 +117,8 @@ Flash an ESP32-S3 MicroPython firmware compatible with your board.
 
 ### Optional: Web Installer (WLED-style)
 
-If you want an install flow like install.wled.me, this repo includes an ESP Web Tools setup:
+this repo includes an ESP Web Tools setup.
+But you can also install Microphthon yourself en use the Powershell script included.
 
 - `web-installer/install.html`
 - `web-installer/manifest.json`
