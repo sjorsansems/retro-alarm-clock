@@ -40,7 +40,8 @@ A short demo video is included in:
 
 - `video/VID_20260530_151530653.mp4`
 
-On GitHub you can open this file directly to watch/download the demo.
+Note: this file is stored with Git LFS. Depending on your browser/GitHub view, inline playback may not always work.
+If playback is unavailable, open the file page and download it to view locally.
 
 ## 3D Print Files (STL)
 
