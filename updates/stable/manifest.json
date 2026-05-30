@@ -1,6 +1,12 @@
 {
-  "version": "6.0.1",
+  "version": "6.0.2",
   "channel": "stable",
-  "notes": "Stable baseline after 6.0.1 release",
-  "files": []
+  "notes": "Retro game fact update: Wikimedia on-this-day source with strict gaming filter",
+  "files": [
+    {
+      "path": "retro_georgy_alarm_klok_v6.py",
+      "url": "https://raw.githubusercontent.com/sjorsansems/retro-alarm-clock/main/retro_georgy_alarm_klok_v6.py",
+      "sha256": "cb1912ad2a40ba17bfba81c06237e453abfad757f2d5cfe309ae7e217c7d5875"
+    }
+  ]
 }

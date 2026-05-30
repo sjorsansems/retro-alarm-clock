@@ -135,9 +135,17 @@ UP_BUTTON_PIN = 12    # Touch12 / ADC2_1 — omgewisseld op verzoek
 DOWN_BUTTON_PIN = 13  # Touch13 / ADC2_2 — omgewisseld op verzoek
 SET_BUTTON_PIN = 14   # Touch14 / ADC2_3 — vrij
 DAY_KEYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
-APP_VERSION = "6.0.1"
+APP_VERSION = "6.0.2"
 DEFAULT_UPDATE_MANIFEST_URL = "https://sjorsansems.github.io/retro-alarm-clock/updates/stable/manifest.json"
 ANIMATIONS_DIR = "animations"
+RETRO_FACT_SOURCE_URL = "https://api.wikimedia.org/feed/v1/wikipedia/en/onthisday/events/{month:02d}/{day:02d}"
+RETRO_FACT_STRONG_KEYWORDS = (
+    "video game", "video games", "console", "arcade", "nintendo", "sega",
+    "atari", "playstation", "xbox", "commodore", "amiga", "mario", "zelda",
+    "tetris", "doom", "pokemon", "sonic", "game boy", "nes", "snes",
+    "mega drive", "megadrive", "genesis", "master system", "dreamcast",
+    "gamecube", "neo geo", "virtual boy", "pc engine",
+)
 
 # Aantal MP3-nummers op de SD-kaart (lied 1 t/m N)
 DFPLAYER_TRACK_COUNT = 30
@@ -711,6 +719,10 @@ class App:
         self._update_latest_version = APP_VERSION
         self._update_pending = False
         self._update_manifest_cache = None
+        self._retro_fact_pending = False
+        self._retro_fact_text = ""
+        self._retro_fact_source = ""
+        self._retro_fact_until = 0
         self._easter_active_until = None
         self._easter_message = ""
         self._easter_key = None
@@ -1540,7 +1552,95 @@ class App:
         self.alarm_started_ms = time.ticks_ms()
         self.alarm_until = time.ticks_add(time.ticks_ms(), ALARM_AUTO_STOP_MS)
 
-    def _stop_alarm(self):
+    def _wrap_feedback_lines(self, text, max_chars=16, limit=4):
+        words = [w for w in str(text or "").replace("\n", " ").split(" ") if w]
+        lines = []
+        current = ""
+        for word in words:
+            candidate = word if not current else current + " " + word
+            if len(candidate) <= max_chars:
+                current = candidate
+            else:
+                if current:
+                    lines.append(current)
+                current = word
+                if len(lines) >= limit:
+                    break
+        if current and len(lines) < limit:
+            lines.append(current)
+        if not lines:
+            lines = [""]
+        return lines[:limit]
+
+    def _normalize_retro_fact_text(self, text):
+        fact = str(text or "").strip()
+        fact = fact.replace("\u2019", "'")
+        fact = fact.replace("  ", " ")
+        if fact.endswith("."):
+            fact = fact[:-1]
+        if len(fact) > 96:
+            fact = fact[:93].rstrip() + "..."
+        return fact
+
+    def _is_retro_fact_candidate(self, text):
+        value = str(text or "").lower()
+        for keyword in RETRO_FACT_STRONG_KEYWORDS:
+            if keyword in value:
+                return True
+        return False
+
+    def _build_retro_fact_fallback(self, t):
+        day_key = "{:02d}{:02d}".format(int(t[2]), int(t[1]))
+        seed = 0
+        for ch in day_key:
+            seed = (seed * 33 + ord(ch)) & 0x7fffffff
+        facts = [
+            "1977: Atari released the VCS, later known as the Atari 2600",
+            "1985: Super Mario Bros. launched in Japan and reshaped platform games",
+            "1989: Nintendo launched the Game Boy and handheld gaming exploded",
+            "1994: Sony entered the console market with the original PlayStation",
+            "1998: Sega released the Dreamcast in Japan, a cult retro classic",
+            "1986: The Legend of Zelda debuted and defined adventure design",
+        ]
+        return facts[seed % len(facts)]
+
+    def _fetch_retro_game_fact(self):
+        t = self.clock.read_time()
+        month = int(t[1])
+        day = int(t[2])
+        url = RETRO_FACT_SOURCE_URL.format(month=month, day=day)
+        try:
+            raw = self._http_get_bytes(url, max_bytes=120000, timeout_s=10)
+            payload = json.loads(raw.decode("utf-8", "ignore"))
+            events = payload.get("events", []) or []
+            candidates = []
+            for item in events:
+                text = str((item or {}).get("text", "") or "").strip()
+                year = str((item or {}).get("year", "") or "").strip()
+                if text and self._is_retro_fact_candidate(text):
+                    candidates.append((year, text))
+            if candidates:
+                year, text = candidates[0]
+                fact = self._normalize_retro_fact_text(text)
+                if year:
+                    fact = "{}: {}".format(year, fact)
+                return fact, url
+        except Exception as e:
+            print("! Retro fact fetch fout:", e)
+
+        return self._build_retro_fact_fallback(t), "fallback"
+
+    def _show_retro_fact(self):
+        fact, source = self._fetch_retro_game_fact()
+        self._retro_fact_text = fact
+        self._retro_fact_source = source
+        self._retro_fact_pending = False
+        self._set_feedback_lines = ["RETRO FACT", "---"] + self._wrap_feedback_lines(fact, max_chars=18, limit=3)
+        self._set_feedback_text = fact
+        self._set_feedback_until = time.ticks_add(time.ticks_ms(), 10000)
+        print("Retro fact:", fact)
+
+    def _stop_alarm(self, show_retro_fact=False):
         self.alarm_until = None
         self.alarm_started_ms = None
         self._alarm_repeat_track = True
@@ -1563,6 +1663,11 @@ class App:
         self._led_sunrise_active = False
         self._gif_runtime_failed = False
         self.active_gif = ""
+        if show_retro_fact:
+            self._retro_fact_pending = True
+            self._set_feedback_lines = ["RETRO FACT", "laden..."]
+            self._set_feedback_text = "RETRO FACT laden..."
+            self._set_feedback_until = time.ticks_add(time.ticks_ms(), 10000)
         # Sluit eventueel open GIF-bestand
         if self._gif_file is not None:
             try:
@@ -1590,7 +1695,7 @@ class App:
             return
         self.snooze_tone = self.active_tone
         self.snooze_gif = self.active_gif
-        self._stop_alarm()
+        self._stop_alarm(show_retro_fact=False)
         self.snooze_until = time.ticks_add(time.ticks_ms(), int(minutes) * 60 * 1000)
         self._set_feedback("SNOOZE 10 MIN", ms=2000)
         print("Alarm snooze {} min".format(int(minutes)))
@@ -1807,7 +1912,7 @@ class App:
 
     def _set_short_press(self):
         if self.alarm_until is not None:
-            self._stop_alarm()
+            self._stop_alarm(show_retro_fact=True)
             return
         if self.alarm_edit_mode:
             self.alarm_edit_hold_hint_until = time.ticks_add(time.ticks_ms(), 3000)
@@ -1816,7 +1921,7 @@ class App:
 
     def _set_long_press(self):
         if self.alarm_until is not None:
-            self._stop_alarm()
+            self._stop_alarm(show_retro_fact=True)
             return
         if self.alarm_edit_mode:
             self._save_alarm_edit_mode()
@@ -1857,7 +1962,7 @@ class App:
 
     def _down_long_press(self):
         if self.alarm_until is not None:
-            self._stop_alarm()
+            self._stop_alarm(show_retro_fact=True)
             return
         if self.alarm_edit_mode:
             return
@@ -1892,7 +1997,7 @@ class App:
                 s["pending"] = None
                 s["fired_long"] = True
                 if name == "set":
-                    self._stop_alarm()
+                    self._stop_alarm(show_retro_fact=True)
                 elif name == "down":
                     self._snooze_alarm(10)
                 continue
@@ -4945,7 +5050,7 @@ class App:
         if method == "POST" and path == "/api/stop-audio":
             # Stop handmatig gestart afspelen en actieve alarm/test-preview.
             if self.alarm_until is not None:
-                self._stop_alarm()
+                self._stop_alarm(show_retro_fact=True)
             else:
                 if self.dfplayer is not None:
                     try:
@@ -5100,6 +5205,15 @@ class App:
                             self.snooze_gif = ""
                     else:
                         self._check_scheduled_alarm()
+
+                if self._retro_fact_pending and self.alarm_until is None and self.snooze_until is None:
+                    if self.wifi_ok and self.wifi and self.wifi.is_connected():
+                        self._show_retro_fact()
+                    else:
+                        self._retro_fact_pending = False
+                        self._set_feedback_lines = ["RETRO FACT", "geen internet"]
+                        self._set_feedback_text = "RETRO FACT geen internet"
+                        self._set_feedback_until = time.ticks_add(time.ticks_ms(), 4500)
 
                 if frame > 0 and frame % 18000 == 0 and self.wifi_ok:
                     self.clock.sync_ntp()
