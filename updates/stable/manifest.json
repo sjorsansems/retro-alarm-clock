@@ -1,7 +1,7 @@
 {
-  "version": "6.0.6",
+  "version": "6.0.7",
   "channel": "stable",
-  "notes": "GitHub Auto-Update shows a progress bar while installing updates",
+  "notes": "Retro facts wrap harder so long facts scroll vertically on the screen",
   "files": [
     {
       "path": "retro_georgy_alarm_klok_v6.py",

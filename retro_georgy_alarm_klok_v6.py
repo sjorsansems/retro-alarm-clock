@@ -1619,9 +1619,14 @@ class App:
             self.display.text(value, x, y, 1)
             return
 
-        # Voor losse lange regels: geen horizontale marquee meer, maar eerst netjes wrappen.
-        wrapped = self._wrap_feedback_lines(value, max_chars=16, limit=4)
-        self.display.text(wrapped[0], max(0, (128 - len(wrapped[0]) * 8) // 2), y, 1)
+        # Voor losse lange regels: stack de wrapped regels verticaal in plaats van horizontaal te schuiven.
+        wrapped = self._wrap_feedback_lines(value, max_chars=12, limit=4)
+        yy = y
+        for line in wrapped:
+            if line:
+                x = max(0, (128 - len(line) * 8) // 2)
+                self.display.text(line, x, yy, 1)
+            yy += 10
 
     def _build_retro_fact_fallback(self, t):
         year = int(t[0]) if t and len(t) > 0 else 2000
@@ -1643,7 +1648,7 @@ class App:
         self._retro_fact_text = fact
         self._retro_fact_source = source
         self._retro_fact_pending = False
-        self._set_feedback_lines = ["RETRO FACT", "---"] + self._wrap_feedback_lines(fact, max_chars=18, limit=3)
+        self._set_feedback_lines = ["RETRO FACT", "---"] + self._wrap_feedback_lines(fact, max_chars=12, limit=8)
         self._set_feedback_text = fact
         self._set_feedback_start_ms = time.ticks_ms()
         self._set_feedback_until = time.ticks_add(time.ticks_ms(), 10000)
