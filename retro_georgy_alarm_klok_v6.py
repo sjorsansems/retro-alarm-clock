@@ -135,7 +135,7 @@ UP_BUTTON_PIN = 12    # Touch12 / ADC2_1 — omgewisseld op verzoek
 DOWN_BUTTON_PIN = 13  # Touch13 / ADC2_2 — omgewisseld op verzoek
 SET_BUTTON_PIN = 14   # Touch14 / ADC2_3 — vrij
 DAY_KEYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
-APP_VERSION = "6.1.1"
+APP_VERSION = "6.1.3"
 DEFAULT_UPDATE_MANIFEST_URL = "https://sjorsansems.github.io/retro-alarm-clock/updates/stable/manifest.json"
 ANIMATIONS_DIR = "animations"
 DEFAULT_RETRO_FACT_DISPLAY_SECONDS = 10
@@ -191,45 +191,45 @@ DOS_IDLE_SCENES = [
     {
         "concept": "grappig",
         "lines": [
-            "C:\\> loading retro mode...",
-            "ERROR: coffee not found",
-            "Try again [Y/N]?",
+            "C:\\> load retro",
+            "ERR: coffee.sys",
+            "Retry [Y/N]?",
         ],
         "footer": "C:\\>_",
     },
     {
         "concept": "grappig",
         "lines": [
-            "Error 274: keyboard not found",
-            "press F1 to continue",
-            "(F1 is also missing)",
+            "Error 274:",
+            "Keyboard missing",
+            "Press F1... nope",
         ],
         "footer": "C:\\> help",
     },
     {
         "concept": "grappig",
         "lines": [
-            "Not enough memory to run",
-            "Wolvenstein 3-D",
-            "Close 47 TSR programs",
+            "No memory for",
+            "Wolfenstein 3-D",
+            "Close TSRs",
         ],
-        "footer": "MEM FREE: 12 KB",
+        "footer": "MEM FREE: 12K",
     },
     {
         "concept": "boot",
         "lines": [
-            "Setup cannot install",
-            "MS-DOS 6.22 on your",
-            "computer",
+            "Setup failed:",
+            "MS-DOS 6.22",
+            "Install aborted",
         ],
-        "footer": "Press F3 to reboot",
+        "footer": "Press F3 reboot",
     },
     {
         "concept": "boot",
         "lines": [
             "HIMEM.SYS loaded",
             "EMM386 failed",
-            "Continuing anyway...",
+            "Continue anyway",
         ],
         "footer": "C:\\> win /3",
     },
@@ -240,13 +240,13 @@ DOS_IDLE_SCENES = [
             "B:\\ DRIVE ERROR",
             "C:\\ maybe OK",
         ],
-        "footer": "Retry, Abort, Fail?",
+        "footer": "Retry/Abort/Fail",
     },
     {
         "concept": "creepy",
         "lines": [
-            "Virus detected in",
-            "clock.exe",
+            "Virus found in",
+            "CLOCK.EXE",
             "Quarantine failed",
         ],
         "footer": "SCAN CODE: 0xDEAD",
@@ -254,7 +254,7 @@ DOS_IDLE_SCENES = [
     {
         "concept": "creepy",
         "lines": [
-            "MEMORY MANAGER",
+            "MEM MANAGER",
             "NOT INSTALLED",
             "SYSTEM UNSTABLE",
         ],
@@ -1109,7 +1109,7 @@ class App:
             return
         self._dos_idle_scene = self._pick_dos_idle_scene()
         self._dos_idle_scene_cursor = ((now_ms // 280) % 2) == 0
-        self._dos_idle_next_scene_ms = time.ticks_add(now_ms, 1700 + ((now_ms // 11) % 1800))
+        self._dos_idle_next_scene_ms = time.ticks_add(now_ms, 3800 + ((now_ms // 13) % 2600))
 
     def _start_dos_idle(self, manual=False):
         self._roll_dos_idle_day()
@@ -1121,7 +1121,7 @@ class App:
             self._dos_idle_shown_today += 1
 
         now_ms = time.ticks_ms()
-        self._dos_idle_active_until = time.ticks_add(now_ms, 12000)
+        self._dos_idle_active_until = time.ticks_add(now_ms, 26000)
         self._dos_idle_next_scene_ms = 0
         self._dos_idle_scene = None
         self._advance_dos_idle_scene(now_ms, force=True)
@@ -1162,17 +1162,16 @@ class App:
 
         self.display.fill(0)
         self.display.rect(0, 0, 128, 64, 1)
-        self.display.text("RETRO DOS", 2, 2, 1)
-        self.display.text("C:\\>", 2, 12, 1)
+        self.display.text("C:\\>", 2, 2, 1)
         if blink:
-            self.display.fill_rect(34, 19, 4, 1, 1)
+            self.display.fill_rect(34, 9, 4, 1, 1)
 
-        y = 24
+        y = 12
         for line in lines[:3]:
-            self.display.text(str(line)[:20], 2, y, 1)
+            self.display.text(str(line)[:16], 2, y, 1)
             y += 10
 
-        self.display.text(footer[:20], 2, 56, 1)
+        self.display.text(footer[:16], 2, 56, 1)
         self.display.show()
         return True
 

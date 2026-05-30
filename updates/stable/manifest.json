@@ -1,7 +1,7 @@
 {
-  "version": "6.1.1",
+  "version": "6.1.3",
   "channel": "stable",
-  "notes": "README updated with update progress, Retro Fact duration, and DOS Idle Chaos docs",
+  "notes": "DOS idle scenes now stay visible longer and switch slower",
   "files": [
     {
       "path": "retro_georgy_alarm_klok_v6.py",
