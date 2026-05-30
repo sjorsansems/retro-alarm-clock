@@ -1,7 +1,7 @@
 {
-  "version": "6.0.5",
+  "version": "6.0.6",
   "channel": "stable",
-  "notes": "Offline retro fact library; test card shows the fact on screen for 10 seconds",
+  "notes": "GitHub Auto-Update shows a progress bar while installing updates",
   "files": [
     {
       "path": "retro_georgy_alarm_klok_v6.py",

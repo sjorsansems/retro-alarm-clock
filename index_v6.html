@@ -58,6 +58,16 @@ body{
 }
 .meter{height:12px;background:#1a1730;border:2px solid #4b4271;border-radius:0;overflow:hidden;margin:8px 0}
 .meter>span{display:block;height:100%;background:linear-gradient(90deg,#29d7c8,#66ff99);width:0%}
+.indeterminate-bar{position:relative;overflow:hidden;background:#1a1730;border:2px solid #4b4271;border-radius:0;height:12px}
+.indeterminate-bar::before{
+  content:'';
+  position:absolute;
+  inset:0;
+  width:35%;
+  background:linear-gradient(90deg,rgba(31,211,197,.15),rgba(31,211,197,.95),rgba(255,159,28,.95),rgba(31,211,197,.15));
+  animation:updateBarSlide 1.1s linear infinite;
+}
+@keyframes updateBarSlide{0%{transform:translateX(-120%)}100%{transform:translateX(320%)}}
 label{display:block;font-size:13px;font-weight:700;margin-bottom:6px;color:#e8e5f8}
 input,select,button{
   width:100%;
@@ -321,6 +331,9 @@ code{background:#15112a;border:1px solid #4d4175;padding:1px 5px;border-radius:0
     <div class="row" style="margin-top:10px">
       <button class="alt" onclick="installUpdateNow()">Installeer update</button>
       <button class="ghost" onclick="refresh()">Status verversen</button>
+    </div>
+    <div id="updateProgressWrap" style="display:none;margin-top:10px;margin-bottom:2px">
+      <div class="indeterminate-bar"></div>
     </div>
     <div id="updateStatusLine" class="tiny" style="margin-top:8px">Update status: -</div>
   </div>
@@ -969,15 +982,30 @@ async function checkUpdatesNow(){
 
 async function installUpdateNow(){
   if(!confirm('Update downloaden en installeren? De klok herstart daarna.'))return
-  const out=await apiPost('/api/apply-update',{})
-  if(out.ok&&out.updated){
-    setStatus('Update geïnstalleerd, klok herstart...',false)
-  }else if(out.ok){
-    setStatus(out.message||'Geen update toegepast',false)
-  }else{
-    setStatus(out.error||'Update installeren mislukt',true)
+  const progressWrap=document.getElementById('updateProgressWrap')
+  const statusLine=document.getElementById('updateStatusLine')
+  if(progressWrap)progressWrap.style.display='block'
+  if(statusLine)statusLine.textContent='Update status: installeren...'
+  try{
+    const out=await apiPost('/api/apply-update',{})
+    if(out.ok&&out.updated){
+      if(statusLine)statusLine.textContent='Update status: Update geïnstalleerd, klok herstart...'
+      setStatus('Update geïnstalleerd, klok herstart...',false)
+    }else if(out.ok){
+      if(statusLine)statusLine.textContent='Update status: '+(out.message||'Geen update toegepast')
+      setStatus(out.message||'Geen update toegepast',false)
+    }else{
+      if(statusLine)statusLine.textContent='Update status: '+(out.error||'Update installeren mislukt')
+      setStatus(out.error||'Update installeren mislukt',true)
+    }
+  }catch(err){
+    const msg=(err&&err.message)?err.message:String(err)
+    if(statusLine)statusLine.textContent='Update status: '+msg
+    setStatus(msg,true)
+  }finally{
+    if(progressWrap)progressWrap.style.display='none'
+    refresh()
   }
-  refresh()
 }
 
 async function testRetroFactNow(){
