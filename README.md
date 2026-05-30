@@ -333,12 +333,12 @@ When you stop the alarm, the clock can show a short retro-game fact on the displ
 
 How it works:
 
-1. The firmware fetches an on-this-day event from the Wikimedia feed.
-2. It only uses events that strongly match retro gaming or console history.
-3. If no strong match is found, it falls back to a built-in retro game fact.
+1. The firmware picks a fact from a local retro-game library based on the date.
+2. This works fully offline, so no internet connection is required.
+3. The fact is deterministic per day, so the same date shows the same retro fact.
 4. Long facts scroll vertically with a short pause before moving.
 
-The web UI also includes a **Retro Fact Test** card so you can test the online connection and preview the fetched fact without triggering the alarm.
+The web UI also includes a **Retro Fact Test** card so you can preview the local fact without triggering the alarm.
 
 ### GIF to BIN Tool (How to Use)
 

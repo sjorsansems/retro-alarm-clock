@@ -135,17 +135,53 @@ UP_BUTTON_PIN = 12    # Touch12 / ADC2_1 — omgewisseld op verzoek
 DOWN_BUTTON_PIN = 13  # Touch13 / ADC2_2 — omgewisseld op verzoek
 SET_BUTTON_PIN = 14   # Touch14 / ADC2_3 — vrij
 DAY_KEYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
-APP_VERSION = "6.0.3"
+APP_VERSION = "6.0.4"
 DEFAULT_UPDATE_MANIFEST_URL = "https://sjorsansems.github.io/retro-alarm-clock/updates/stable/manifest.json"
 ANIMATIONS_DIR = "animations"
-RETRO_FACT_SOURCE_URL = "https://api.wikimedia.org/feed/v1/wikipedia/en/onthisday/events/{month:02d}/{day:02d}"
-RETRO_FACT_STRONG_KEYWORDS = (
-    "video game", "video games", "console", "arcade", "nintendo", "sega",
-    "atari", "playstation", "xbox", "commodore", "amiga", "mario", "zelda",
-    "tetris", "doom", "pokemon", "sonic", "game boy", "nes", "snes",
-    "mega drive", "megadrive", "genesis", "master system", "dreamcast",
-    "gamecube", "neo geo", "virtual boy", "pc engine",
-)
+RETRO_FACT_LIBRARY = [
+    "1977: Atari released the VCS, later known as the Atari 2600",
+    "1980: Pac-Man turned arcades into a global phenomenon",
+    "1983: Nintendo launched the Famicom in Japan",
+    "1985: Super Mario Bros. launched in Japan and reshaped platform games",
+    "1986: The Legend of Zelda debuted and defined adventure design",
+    "1987: Zelda II pushed the series into a more experimental direction",
+    "1988: Sega launched the Mega Drive and started a new console war",
+    "1989: Nintendo launched the Game Boy and handheld gaming exploded",
+    "1990: The Super Famicom arrived and raised the bar for 16-bit games",
+    "1991: Sonic the Hedgehog introduced Sega's fastest mascot",
+    "1992: Mortal Kombat made arcades louder, stranger, and bloodier",
+    "1993: DOOM changed first-person shooters forever",
+    "1994: Sony entered the console market with the original PlayStation",
+    "1995: Chrono Trigger became a legendary JRPG favorite",
+    "1996: Nintendo 64 brought 3D gaming to the mainstream",
+    "1997: Final Fantasy VII made JRPGs a global event",
+    "1998: Sega released the Dreamcast in Japan, a cult retro classic",
+    "1999: Shenmue showed how ambitious open-world storytelling could be",
+    "2000: The PlayStation 2 launched and became a massive success",
+    "2001: The Game Boy Advance kept handheld gaming strong",
+    "2002: The GameCube gave Nintendo a compact purple powerhouse",
+    "2004: The Nintendo DS made touch controls a mainstream idea",
+    "2005: The Xbox 360 kicked off the HD console era",
+    "2006: The Wii made motion controls a household concept",
+    "2007: Super Mario Galaxy proved 3D platforming could still surprise",
+    "2008: Braid helped define the indie game boom",
+    "2009: Minecraft began its rise from small experiment to phenomenon",
+    "2010: Kinect made camera-controlled gaming a headline feature",
+    "2011: The Legend of Zelda: Skyward Sword arrived with motion controls",
+    "2012: The Wii U introduced a second-screen console idea",
+    "2013: The PlayStation 4 launched and set up the modern era",
+    "2014: Shovel Knight became an instant retro-inspired classic",
+    "2015: Undertale showed how much personality a small game could have",
+    "2016: Pokémon Go turned real-world streets into game maps",
+    "2017: The Nintendo Switch blended handheld and home gaming",
+    "2018: Celeste became a standout example of modern pixel-art design",
+    "2019: The Sega Genesis Mini brought 16-bit nostalgia back again",
+    "2020: The Xbox Series X|S opened the latest console generation",
+    "2021: Metroid Dread brought 2D action back into the spotlight",
+    "2022: Atari 50 celebrated the long history of arcade and console gaming",
+    "2023: The Legend of Zelda: Tears of the Kingdom became a major launch moment",
+    "2024: Retro gaming kept thriving through remakes, minis, and indie tributes",
+]
 
 # Aantal MP3-nummers op de SD-kaart (lied 1 t/m N)
 DFPLAYER_TRACK_COUNT = 30
@@ -1587,63 +1623,20 @@ class App:
         wrapped = self._wrap_feedback_lines(value, max_chars=16, limit=4)
         self.display.text(wrapped[0], max(0, (128 - len(wrapped[0]) * 8) // 2), y, 1)
 
-    def _normalize_retro_fact_text(self, text):
-        fact = str(text or "").strip()
-        fact = fact.replace("\u2019", "'")
-        fact = fact.replace("  ", " ")
-        if fact.endswith("."):
-            fact = fact[:-1]
-        if len(fact) > 96:
-            fact = fact[:93].rstrip() + "..."
-        return fact
-
-    def _is_retro_fact_candidate(self, text):
-        value = str(text or "").lower()
-        for keyword in RETRO_FACT_STRONG_KEYWORDS:
-            if keyword in value:
-                return True
-        return False
-
     def _build_retro_fact_fallback(self, t):
-        day_key = "{:02d}{:02d}".format(int(t[2]), int(t[1]))
-        seed = 0
-        for ch in day_key:
-            seed = (seed * 33 + ord(ch)) & 0x7fffffff
-        facts = [
-            "1977: Atari released the VCS, later known as the Atari 2600",
-            "1985: Super Mario Bros. launched in Japan and reshaped platform games",
-            "1989: Nintendo launched the Game Boy and handheld gaming exploded",
-            "1994: Sony entered the console market with the original PlayStation",
-            "1998: Sega released the Dreamcast in Japan, a cult retro classic",
-            "1986: The Legend of Zelda debuted and defined adventure design",
-        ]
-        return facts[seed % len(facts)]
+        year = int(t[0]) if t and len(t) > 0 else 2000
+        month = int(t[1]) if t and len(t) > 1 else 1
+        day = int(t[2]) if t and len(t) > 2 else 1
+        month_lengths = (31, 29 if (year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)) else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
+        day_of_year = day
+        for i in range(max(0, month - 1)):
+            day_of_year += month_lengths[i]
+        idx = (day_of_year - 1) % len(RETRO_FACT_LIBRARY)
+        return RETRO_FACT_LIBRARY[idx]
 
     def _fetch_retro_game_fact(self):
         t = self.clock.read_time()
-        month = int(t[1])
-        day = int(t[2])
-        url = RETRO_FACT_SOURCE_URL.format(month=month, day=day)
-        try:
-            raw = self._http_get_bytes(url, max_bytes=120000, timeout_s=10)
-            payload = json.loads(raw.decode("utf-8", "ignore"))
-            events = payload.get("events", []) or []
-            candidates = []
-            for item in events:
-                text = str((item or {}).get("text", "") or "").strip()
-                year = str((item or {}).get("year", "") or "").strip()
-                if text and self._is_retro_fact_candidate(text):
-                    candidates.append((year, text))
-            if candidates:
-                year, text = candidates[0]
-                fact = self._normalize_retro_fact_text(text)
-                if year:
-                    fact = "{}: {}".format(year, fact)
-                return fact, url
-        except Exception as e:
-            print("! Retro fact fetch fout:", e)
-
-        return self._build_retro_fact_fallback(t), "fallback"
+        return self._build_retro_fact_fallback(t), "offline"
 
     def _show_retro_fact(self):
         fact, source = self._fetch_retro_game_fact()

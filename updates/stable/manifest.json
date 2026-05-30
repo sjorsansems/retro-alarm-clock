@@ -1,7 +1,7 @@
 {
-  "version": "6.0.3",
+  "version": "6.0.4",
   "channel": "stable",
-  "notes": "Retro fact web test button and endpoint for live connection checks",
+  "notes": "Offline retro fact library with local date-based test card",
   "files": [
     {
       "path": "retro_georgy_alarm_klok_v6.py",
