@@ -115,6 +115,25 @@ Optional local tooling:
 ### 1. Flash MicroPython
 Flash an ESP32-S3 MicroPython firmware compatible with your board.
 
+### Optional: Web Installer (WLED-style)
+
+If you want an install flow like install.wled.me, this repo includes an ESP Web Tools setup:
+
+- `web-installer/install.html`
+- `web-installer/manifest.json`
+
+Usage:
+
+1. Ensure `web-installer/manifest.json` points to a valid ESP32-S3 firmware `.bin`.
+2. Publish your repo with GitHub Pages.
+3. Open `https://<your-user>.github.io/<your-repo>/web-installer/install.html`.
+4. Click **Install Alarm Clock Firmware** and select your board serial port.
+
+Important:
+
+- Web Serial only works on secure pages (`https://`) in compatible browsers (Chrome/Edge).
+- This web installer flashes firmware only. App files are still deployed with `mpremote` or OTA.
+
 ### 2. Clone the Project
 
 ```bash
