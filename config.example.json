@@ -1,0 +1,52 @@
+{
+  "wifi": {
+    "mode": "sta",
+    "ssid": "",
+    "password": "",
+    "channel": 6,
+    "keep_alive": false
+  },
+  "ntp": {
+    "enabled": true,
+    "server": "pool.ntp.org",
+    "sync_interval": 3600,
+    "timezone": "Europe/Amsterdam"
+  },
+  "alarm": {
+    "enabled": false,
+    "hour": 7,
+    "minute": 0
+  },
+  "alarm_schedule": {
+    "mon": {"enabled": false, "hour": 7, "minute": 0},
+    "tue": {"enabled": false, "hour": 7, "minute": 0},
+    "wed": {"enabled": false, "hour": 7, "minute": 0},
+    "thu": {"enabled": false, "hour": 7, "minute": 0},
+    "fri": {"enabled": false, "hour": 7, "minute": 0},
+    "sat": {"enabled": false, "hour": 7, "minute": 0},
+    "sun": {"enabled": false, "hour": 7, "minute": 0}
+  },
+  "alarm_sound": {
+    "tone": "classic",
+    "volume": 70,
+    "animation_theme": "rotate"
+  },
+  "buzzer": {
+    "volume": 500,
+    "duration": 60
+  },
+  "display": {
+    "type": "SH1106",
+    "width": 128,
+    "height": 64
+  },
+  "ui": {
+    "language": "nl"
+  },
+  "weather": {
+    "enabled": true,
+    "latitude": 51.92,
+    "longitude": 6.08,
+    "interval_s": 1800
+  }
+}

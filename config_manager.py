@@ -85,15 +85,102 @@ class ConfigManager:
         except Exception as e:
             print(f"✗ Fout bij instellen {section}.{key}: {e}")
             return False
+
+    def set_wifi_credentials(self, ssid, password, keep_alive=None):
+        """Sla WiFi-gegevens op in de config."""
+        try:
+            defaults = self._get_defaults().get("wifi", {})
+            wifi = self.config.setdefault("wifi", {})
+            wifi["mode"] = wifi.get("mode", defaults.get("mode", "sta"))
+            wifi["ssid"] = str(ssid or "").strip()
+            wifi["password"] = str(password or "")
+            wifi["channel"] = int(wifi.get("channel", defaults.get("channel", 6)) or 6)
+            if keep_alive is not None:
+                wifi["keep_alive"] = bool(keep_alive)
+            elif "keep_alive" not in wifi:
+                wifi["keep_alive"] = bool(defaults.get("keep_alive", False))
+            if wifi["ssid"] and wifi["ssid"] != defaults.get("ssid", ""):
+                wifi["custom_profile"] = {
+                    "ssid": wifi["ssid"],
+                    "password": wifi["password"],
+                    "channel": wifi["channel"],
+                    "keep_alive": wifi["keep_alive"],
+                }
+            return self.save()
+        except Exception as e:
+            print(f"✗ Fout bij opslaan WiFi-gegevens: {e}")
+            return False
+
+    def toggle_wifi_profile(self):
+        """Wissel tussen default WiFi en laatst opgeslagen custom WiFi-profiel."""
+        try:
+            defaults = dict(self._get_defaults().get("wifi", {}))
+            wifi = self.config.setdefault("wifi", {})
+            current_ssid = str(wifi.get("ssid", "") or "").strip()
+            current_password = str(wifi.get("password", "") or "")
+            current_channel = int(wifi.get("channel", defaults.get("channel", 6)) or 6)
+            current_keep_alive = bool(wifi.get("keep_alive", defaults.get("keep_alive", False)))
+
+            custom = wifi.get("custom_profile", {})
+            custom_ssid = str(custom.get("ssid", "") or "").strip()
+            custom_password = str(custom.get("password", "") or "")
+            custom_channel = int(custom.get("channel", defaults.get("channel", 6)) or defaults.get("channel", 6) or 6)
+            custom_keep_alive = bool(custom.get("keep_alive", current_keep_alive))
+
+            default_ssid = str(defaults.get("ssid", "") or "").strip()
+            default_password = str(defaults.get("password", "") or "")
+            default_channel = int(defaults.get("channel", 6) or 6)
+            default_keep_alive = bool(defaults.get("keep_alive", False))
+
+            current_is_default = (current_ssid == default_ssid and current_password == default_password)
+
+            if current_is_default:
+                if not custom_ssid:
+                    return {"ok": False, "error": "Geen opgeslagen custom WiFi-profiel"}
+                wifi["ssid"] = custom_ssid
+                wifi["password"] = custom_password
+                wifi["channel"] = custom_channel
+                wifi["keep_alive"] = custom_keep_alive
+                target = "custom"
+            else:
+                if current_ssid:
+                    wifi["custom_profile"] = {
+                        "ssid": current_ssid,
+                        "password": current_password,
+                        "channel": current_channel,
+                        "keep_alive": current_keep_alive,
+                    }
+                wifi["ssid"] = default_ssid
+                wifi["password"] = default_password
+                wifi["channel"] = default_channel
+                wifi["keep_alive"] = default_keep_alive
+                target = "default"
+
+            if not self.save():
+                return {"ok": False, "error": "Config opslaan mislukt"}
+            return {"ok": True, "target": target, "ssid": wifi.get("ssid", "")}
+        except Exception as e:
+            print(f"✗ Fout bij wisselen WiFi-profiel: {e}")
+            return {"ok": False, "error": str(e)}
+
+    def reset_wifi_to_defaults(self):
+        """Zet WiFi terug naar veilige project-defaults."""
+        try:
+            self.config["wifi"] = dict(self._get_defaults().get("wifi", {}))
+            return self.save()
+        except Exception as e:
+            print(f"✗ Fout bij resetten WiFi-defaults: {e}")
+            return False
     
     def _get_defaults(self):
         """Standaard instellingen"""
         return {
             "wifi": {
                 "mode": "sta",
-                "ssid": "SL2_IOT",
-                "password": "anuslikker102",
-                "channel": 6
+                "ssid": "",
+                "password": "",
+                "channel": 6,
+                "keep_alive": False
             },
             "ntp": {
                 "enabled": True,
@@ -128,12 +215,16 @@ class ConfigManager:
                 "width": 128,
                 "height": 64
             },
+            "ui": {
+                "language": "nl"
+            },
             "weather": {
                 "enabled": True,
                 "place": "Zevenaar",
                 "latitude": 51.92,
                 "longitude": 6.08,
-                "interval_s": 1800
+                "interval_s": 21600,
+                "updates_per_day": 4
             }
         }
 

@@ -98,7 +98,9 @@ WIFI_DAILY_CHECK_MS = 60000
 WIFI_DAILY_RETRY_MS = 3600000
 WIFI_MIN_FREE_HEAP = 35000
 WIFI_CONNECT_TIMEOUT_S = 8
-DEFAULT_WIFI_SSID = "SL2_IOT"
+DEFAULT_WIFI_SSID = ""
+SETUP_AP_SSID = "AlarmKlok-Setup"
+SETUP_AP_IP = "192.168.4.1"
 WIFI_HOSTNAME = "alarmklok"
 ALARM_INTRO_MS = 2500
 ALARM_BOSS_MS = 20000
@@ -380,6 +382,48 @@ class ClockCore:
         self.rtc = None  # wordt gezet door App na I2C init
 
     @staticmethod
+    def _parse_utc_offset_seconds(tz_name):
+        if not isinstance(tz_name, str):
+            return 0
+        s = tz_name.strip().upper()
+        if s == "UTC":
+            return 0
+        if not s.startswith("UTC") or len(s) <= 3:
+            return 0
+        raw = s[3:]
+        sign = 1
+        if raw.startswith("+"):
+            raw = raw[1:]
+        elif raw.startswith("-"):
+            sign = -1
+            raw = raw[1:]
+        raw = raw.strip()
+        if not raw:
+            return 0
+        hh = 0
+        mm = 0
+        try:
+            if ":" in raw:
+                parts = raw.split(":", 1)
+                hh = int(parts[0] or "0")
+                mm = int(parts[1] or "0")
+            elif len(raw) > 2 and raw.isdigit():
+                hh = int(raw[:-2])
+                mm = int(raw[-2:])
+            else:
+                hh = int(raw)
+                mm = 0
+        except Exception:
+            return 0
+        if hh > 14:
+            hh = 14
+        if mm < 0:
+            mm = 0
+        if mm > 59:
+            mm = 59
+        return sign * (hh * 3600 + mm * 60)
+
+    @staticmethod
     def _is_leap_year(year):
         return (year % 4 == 0 and year % 100 != 0) or (year % 400 == 0)
 
@@ -424,15 +468,18 @@ class ClockCore:
         if self.timezone_name == "Europe/Amsterdam":
             t = self._utc_to_amsterdam(utc_tuple)
             return t, ("CEST" if self._is_dst_nl(utc_tuple[0], utc_tuple[1], utc_tuple[2]) else "CET")
-        off = 0
-        if self.timezone_name.startswith("UTC") and len(self.timezone_name) > 3:
-            try:
-                off = int(self.timezone_name[3:])
-            except:
-                off = 0
+        off_sec = self._parse_utc_offset_seconds(self.timezone_name)
         base = (utc_tuple[0], utc_tuple[1], utc_tuple[2], utc_tuple[3], utc_tuple[4], utc_tuple[5], 0, 0)
-        shifted = time.localtime(time.mktime(base) + off * 3600)
-        return (shifted[0], shifted[1], shifted[2], shifted[3], shifted[4], shifted[5], shifted[6] + 1, shifted[7]), ("UTC" if off == 0 else "UTC{}{}".format("+" if off > 0 else "", off))
+        shifted = time.localtime(time.mktime(base) + off_sec)
+        if off_sec == 0:
+            label = "UTC"
+        else:
+            sign = "+" if off_sec > 0 else "-"
+            total_min = abs(off_sec) // 60
+            hh = total_min // 60
+            mm = total_min % 60
+            label = "UTC{}{:02d}:{:02d}".format(sign, hh, mm)
+        return (shifted[0], shifted[1], shifted[2], shifted[3], shifted[4], shifted[5], shifted[6] + 1, shifted[7]), label
 
     def read_time(self):
         # Lees bij voorkeur rechtstreeks van DS3231
@@ -524,6 +571,23 @@ class App:
         self.wifi_ssid = ssid
         self.wifi_password = pwd
         self.tone = self._normalize_tone_key(self.tone)
+        self.ui_language = "nl"
+        self.wifi_keep_alive = False
+        self.weather_updates_per_day = 4
+        self.setup_mode = False
+        self.setup_reason = ""
+        self.setup_ap_ssid = SETUP_AP_SSID
+        self.ap = None
+        self._pending_restart_ms = None
+        if self.config:
+            self.ui_language = self._normalize_ui_language(self.config.get("ui", "language", "nl"))
+            self.wifi_keep_alive = bool(self.config.get("wifi", "keep_alive", False))
+            raw_updates = self.config.get("weather", "updates_per_day", None)
+            if raw_updates is None:
+                interval_s = int(self.config.get("weather", "interval_s", 0) or 0)
+                if interval_s > 0:
+                    raw_updates = max(1, min(24, int(86400 // interval_s)))
+            self.weather_updates_per_day = self._normalize_weather_updates_per_day(raw_updates)
 
         self.clock = ClockCore(timezone)
         self.alarm_until = None
@@ -542,7 +606,7 @@ class App:
         self.alarm_edit_hour = 7
         self.alarm_edit_minute = 0
         self.alarm_edit_day_key = "mon"
-        self._set_toggle_last_key = None
+        self._skip_once_alarm = None  # (year, month, day, hour, minute) for one-time skip
         self._set_feedback_text = ""
         self._set_feedback_until = 0
         self._set_feedback_lines = []
@@ -586,7 +650,7 @@ class App:
         self.wifi_ok = False
         self.wifi_disabled = False
         self.wifi_reconnect_after_ms = 0
-        self.wifi_auto_off_ms = time.ticks_add(time.ticks_ms(), 30 * 60 * 1000)
+        self.wifi_auto_off_ms = self._next_wifi_auto_off_deadline()
         self.webserver_ready_after_ms = None
         self._ntp_synced_once = False
         self.startup_ip_until = None
@@ -597,13 +661,14 @@ class App:
         self.next_daily_sync_attempt_ms = time.ticks_ms()
         self._display_dim_state = None
         self._display_manual_mode = 0  # 0=normaal, 1=dim, 2=rand, 3=extra dim
+        self._alarm_repeat_track = True  # True=blijven herhalen, False=eenmalig (preview)
         self._weather_phase = 0
         self._rtc_temp = None
         self._rtc_temp_next_ms = 0
         self._weather_code = None      # WMO weathercode van Open-Meteo
         self._weather_temp = None      # buitentemperatuur °C (int)
         self._weather_next_ms = 0      # tijdstip eerste fetch (meteen bij opstart)
-        self._weather_interval_ms = 6 * 3600 * 1000  # 4x per dag
+        self._weather_interval_ms = self._compute_weather_interval_ms(self.weather_updates_per_day)
         self._easter_active_until = None
         self._easter_message = ""
         self._easter_key = None
@@ -672,6 +737,9 @@ class App:
         self._gif_cur_frame = 0
         self._gif_next_ms = 0
         self._gif_data_offset = 0
+        self._gif_runtime_failed = False
+        self._gif_frame_buf = bytearray(128 * 64 // 8)
+        self._gif_fb = framebuf.FrameBuffer(self._gif_frame_buf, 128, 64, framebuf.MONO_VLSB)
 
         # Zorg dat de strip direct bij boot in een bekende UIT-toestand staat.
         self._ensure_leds_ready()
@@ -697,8 +765,7 @@ class App:
         }
 
         # Hardware IRQ op falling + rising edge:
-        # - UP heeft geen lange druk → vuurt pending="short" direct bij indrukken
-        # - SET/DOWN wachten tot loslaten om te bepalen of het kort of lang was
+        # - UP/SET/DOWN wachten tot loslaten om te bepalen of het kort of lang was
         _bs = self._button_state
         def _make_irq(name, has_long_cb, long_ms=0):
             s = _bs[name]
@@ -742,7 +809,117 @@ class App:
             self.last_daily_sync_key = (int(t2[0]), int(t2[1]), int(t2[2]))
         else:
             print("WiFi: niet verbonden bij opstarten")
+            self._start_setup_ap("Geen WiFi verbinding")
         self._apply_display_brightness(force=True)
+
+    def _normalize_weather_updates_per_day(self, value):
+        try:
+            n = int(value)
+        except Exception:
+            return 4
+        if n < 1:
+            return 1
+        if n > 24:
+            return 24
+        return n
+
+    def _normalize_ui_language(self, value):
+        lang = str(value or "nl").strip().lower()
+        return "en" if lang == "en" else "nl"
+
+    def _compute_weather_interval_ms(self, updates_per_day):
+        updates = self._normalize_weather_updates_per_day(updates_per_day)
+        return max(60 * 60 * 1000, (24 * 3600 * 1000) // updates)
+
+    def _next_wifi_auto_off_deadline(self):
+        if self.wifi_keep_alive:
+            return None
+        return time.ticks_add(time.ticks_ms(), 30 * 60 * 1000)
+
+    def _apply_network_settings(self, reset_wifi_timer=False):
+        self.weather_updates_per_day = self._normalize_weather_updates_per_day(self.weather_updates_per_day)
+        self._weather_interval_ms = self._compute_weather_interval_ms(self.weather_updates_per_day)
+        if reset_wifi_timer:
+            if self.wifi_disabled:
+                self.wifi_auto_off_ms = None
+            else:
+                self.wifi_auto_off_ms = self._next_wifi_auto_off_deadline()
+
+    def _schedule_restart(self, delay_ms=1500):
+        self._pending_restart_ms = time.ticks_add(time.ticks_ms(), int(delay_ms))
+
+    def _get_setup_ip(self):
+        try:
+            if self.ap and self.ap.active():
+                return self.ap.ifconfig()[0]
+        except Exception:
+            pass
+        return SETUP_AP_IP
+
+    def _start_setup_ap(self, reason=""):
+        self._close_webserver()
+        self.setup_mode = True
+        self.setup_reason = str(reason or "WiFi instellen")
+        self.wifi_ok = False
+        self.wifi_disabled = True
+        self.startup_ip_until = None
+        try:
+            if self.wifi and self.wifi.sta:
+                try:
+                    self.wifi.sta.disconnect()
+                except Exception:
+                    pass
+                try:
+                    self.wifi.sta.active(False)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        self.wifi = None
+        try:
+            if self.ap is None:
+                self.ap = network.WLAN(network.AP_IF)
+            try:
+                self.ap.active(False)
+            except Exception:
+                pass
+            self.ap.active(True)
+            try:
+                self.ap.ifconfig((SETUP_AP_IP, "255.255.255.0", SETUP_AP_IP, SETUP_AP_IP))
+            except Exception:
+                pass
+            try:
+                self.ap.config(essid=self.setup_ap_ssid)
+            except Exception:
+                pass
+            print("SETUP AP actief:", self.setup_ap_ssid, self._get_setup_ip())
+        except Exception as e:
+            print("! Setup AP start fout:", e)
+            self.ap = None
+        self.webserver_ready_after_ms = time.ticks_ms()
+        self._start_webserver_if_ready()
+
+    def _toggle_wifi_profile(self):
+        if not self.config:
+            print("! Geen config beschikbaar voor WiFi-profielwissel")
+            return False
+        result = self.config.toggle_wifi_profile()
+        if not result.get("ok"):
+            print("! WiFi-profiel wisselen mislukt:", result.get("error", "onbekend"))
+            self._set_feedback_lines = ["WiFi wissel fout", str(result.get("error", "onbekend"))[:16]]
+            self._set_feedback("", ms=2500)
+            return False
+        wifi_cfg = self.config.get("wifi", None, {}) or {}
+        self.wifi_ssid = str(wifi_cfg.get("ssid", DEFAULT_WIFI_SSID) or DEFAULT_WIFI_SSID).strip()
+        self.wifi_password = str(wifi_cfg.get("password", "") or "")
+        self.wifi_keep_alive = bool(wifi_cfg.get("keep_alive", False))
+        self._apply_network_settings(reset_wifi_timer=True)
+        label = "default WiFi" if result.get("target") == "default" else "custom WiFi"
+        self._set_feedback_lines = ["WiFi profiel:", self.wifi_ssid[:16], "Herstart..."]
+        self._set_feedback("", ms=2500)
+        print("WiFi profiel actief:", label, self.wifi_ssid)
+        self._schedule_restart(1200)
+        return True
 
     def _prepare_for_wifi_attempt(self):
         gc.collect()
@@ -840,6 +1017,8 @@ class App:
         self.wifi_ok = False
 
     def _ensure_wifi_connected(self):
+        if self.setup_mode:
+            return False
         gc.collect()
         self.wifi_ok = False
         try:
@@ -873,13 +1052,13 @@ class App:
         return False
 
     def _start_webserver_if_ready(self):
-        if not self.wifi_ok or self.sock is not None:
+        if ((not self.wifi_ok and not self.setup_mode) or self.sock is not None):
             return
 
         if self.webserver_ready_after_ms is not None and time.ticks_diff(time.ticks_ms(), self.webserver_ready_after_ms) < 0:
             return
 
-        ip = self.wifi.get_ip() if self.wifi else "0.0.0.0"
+        ip = self._get_setup_ip() if self.setup_mode else (self.wifi.get_ip() if self.wifi else "0.0.0.0")
         try:
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -898,10 +1077,13 @@ class App:
             self.webserver_ready_after_ms = time.ticks_add(time.ticks_ms(), 5000)
 
     def _handle_wifi_state(self):
+        if self.setup_mode:
+            self._start_webserver_if_ready()
+            return
         now = time.ticks_ms()
 
         # Auto-off na 30 minuten na opstarten
-        if not self.wifi_disabled and self.wifi_auto_off_ms is not None and time.ticks_diff(now, self.wifi_auto_off_ms) >= 0:
+        if (not self.wifi_keep_alive) and (not self.wifi_disabled) and self.wifi_auto_off_ms is not None and time.ticks_diff(now, self.wifi_auto_off_ms) >= 0:
             self.wifi_auto_off_ms = None
             self._disable_wifi()
             self.wifi_disabled = True
@@ -931,10 +1113,14 @@ class App:
                 else:
                     self.next_daily_sync_attempt_ms = time.ticks_add(now, WIFI_DAILY_RETRY_MS)
                     print("Dagelijkse sync mislukt, volgende poging over 1 uur")
-                # Altijd WiFi uitzetten na de sync poging
-                self._disable_wifi()
-                self.wifi_disabled = True
-                self.wifi_auto_off_ms = None
+                # Na sync alleen uitzetten als keep-alive uit staat.
+                if self.wifi_keep_alive:
+                    self.wifi_disabled = False
+                    self.wifi_auto_off_ms = None
+                else:
+                    self._disable_wifi()
+                    self.wifi_disabled = True
+                    self.wifi_auto_off_ms = None
 
     def _default_alarm_schedule(self):
         return {k: {"enabled": False, "hour": 7, "minute": 0} for k in DAY_KEYS}
@@ -1078,6 +1264,16 @@ class App:
                 "percent_used": 0,
             }
 
+    def _get_boot_mode(self):
+        try:
+            with open("boot_mode.txt", "r") as f:
+                mode = (f.read() or "primary").strip().lower()
+                if mode in ("primary", "backup"):
+                    return mode
+        except Exception:
+            pass
+        return "primary"
+
     def _pick_alarm_gif(self, gif_setting):
         if not isinstance(gif_setting, str):
             return ""
@@ -1139,6 +1335,14 @@ class App:
         fire_key = (t[0], t[1], t[2], t[3], t[4])
         if self.last_schedule_fire == fire_key:
             return
+
+        # Eenmalige skip: alleen deze specifieke datum+tijd overslaan.
+        if self._skip_once_alarm == fire_key:
+            self.last_schedule_fire = fire_key
+            self._skip_once_alarm = None
+            print("Alarm eenmalig overgeslagen voor {:04d}-{:02d}-{:02d} {:02d}:{:02d}".format(*fire_key))
+            return
+
         self.last_schedule_fire = fire_key
         self.snooze_until = None
         self.snooze_tone = None
@@ -1147,6 +1351,7 @@ class App:
         self.active_led_tone = self.active_tone
         gif_setting = self.alarm_gif_combo.get(day_key, "random")
         self.active_gif = self._pick_alarm_gif(gif_setting)
+        self._gif_runtime_failed = False
         # Overschrijf tone als de gekozen GIF een vaste koppeling heeft
         if self.active_gif and self._get_gif_tone(self.active_gif) is not None:
             self.active_tone = self._normalize_tone_key(self._get_gif_tone(self.active_gif))
@@ -1159,12 +1364,14 @@ class App:
             print("Random schema: LIED-tone geblokkeerd, fallback tone {}".format(self.active_tone))
             if not self._is_named_schedule_tone(self.active_led_tone):
                 self.active_led_tone = self.active_tone
+        self._alarm_repeat_track = True
         self.alarm_started_ms = time.ticks_ms()
         self.alarm_until = time.ticks_add(time.ticks_ms(), ALARM_AUTO_STOP_MS)
 
     def _stop_alarm(self):
         self.alarm_until = None
         self.alarm_started_ms = None
+        self._alarm_repeat_track = True
         self._nightlight_on = False  # alarm overschrijft nachtlampje
         if self.dfplayer is not None:
             try:
@@ -1182,6 +1389,7 @@ class App:
             except Exception:
                 pass
         self._led_sunrise_active = False
+        self._gif_runtime_failed = False
         self.active_gif = ""
         # Sluit eventueel open GIF-bestand
         if self._gif_file is not None:
@@ -1191,6 +1399,19 @@ class App:
                 pass
             self._gif_file = None
             self._gif_delays = []
+
+    def _disable_gif_for_alarm(self, reason=None):
+        if reason:
+            print("GIF alarm gedeactiveerd:", reason)
+        if self._gif_file is not None:
+            try:
+                self._gif_file.close()
+            except Exception:
+                pass
+        self._gif_file = None
+        self._gif_delays = []
+        self._gif_runtime_failed = True
+        self.active_gif = ""
 
     def _snooze_alarm(self, minutes=10):
         if self.alarm_until is None:
@@ -1261,70 +1482,48 @@ class App:
             "mon": "maandag", "tue": "dinsdag", "wed": "woensdag",
             "thu": "donderdag", "fri": "vrijdag", "sat": "zaterdag", "sun": "zondag"
         }
-        # Tweede druk na UIT: zet exact die eerder uitgezette alarmdag weer AAN.
-        if self._set_toggle_last_key:
-            row = self.alarm_schedule.get(self._set_toggle_last_key)
-            if isinstance(row, dict) and (not bool(row.get("enabled", False))):
-                hh = int(row.get("hour", 7)) % 24
-                mm = int(row.get("minute", 0)) % 60
-                self.alarm_schedule[self._set_toggle_last_key] = {
-                    "enabled": True, "hour": hh, "minute": mm,
-                }
-                if self.config:
-                    self.config.config["alarm_schedule"] = self.alarm_schedule
-                    self.config.save()
-                if self.eeprom is not None:
-                    try:
-                        self.eeprom.save_alarm_schedule(self.alarm_schedule)
-                    except Exception:
-                        pass
-                day_txt = day_map.get(self._set_toggle_last_key, self._set_toggle_last_key)
-                nxt_after = self._next_alarm_entry(include_disabled=False)
-                lines = [
-                    "Alarm aan op:",
-                    "{} {:02d}:{:02d}".format(day_txt, hh, mm),
-                    "---",
-                ]
-                if nxt_after:
-                    nxt_day = day_map.get(nxt_after["key"], nxt_after["day"])
-                    lines += [
-                        "Eerst volgend:",
-                        "{} {:02d}:{:02d}".format(nxt_day, nxt_after["hour"], nxt_after["minute"]),
-                    ]
-                else:
-                    lines += ["Geen volgend", "alarm actief"]
-                self._set_feedback_lines = lines
-                self._set_feedback("", ms=3500)
-                print("Alarm AAN {} {:02d}:{:02d}".format(day_txt, hh, mm))
-                self._set_toggle_last_key = None
-                return
-
-        # Eerste druk: zet eerstvolgende actieve alarm UIT.
+        # Eén druk in normaal scherm: sla alleen het eerstvolgende alarm één keer over.
+        # Tweede druk voor hetzelfde doel: annuleer die skip weer.
         nxt = self._next_alarm_entry(include_disabled=False)
         if not nxt:
             self._set_feedback_lines = ["Geen actief", "alarm gevonden"]
             self._set_feedback("", ms=2500)
-            print("Geen actief alarm om UIT te zetten")
+            print("Geen actief alarm om over te slaan")
             return
 
         key = nxt["key"]
-        row = self.alarm_schedule.get(key, {})
-        hh = int(row.get("hour", nxt["hour"])) % 24
-        mm = int(row.get("minute", nxt["minute"])) % 60
-        self.alarm_schedule[key] = {"enabled": False, "hour": hh, "minute": mm}
-        if self.config:
-            self.config.config["alarm_schedule"] = self.alarm_schedule
-            self.config.save()
-        if self.eeprom is not None:
-            try:
-                self.eeprom.save_alarm_schedule(self.alarm_schedule)
-            except Exception:
-                pass
-        self._set_toggle_last_key = key
+        hh = int(nxt["hour"]) % 24
+        mm = int(nxt["minute"]) % 60
+
+        # Bepaal de concrete kalenderdatum van 'nxt'.
+        now = self.clock.read_time()
+        y = int(now[0])
+        mo = int(now[1])
+        d = int(now[2])
+        days_ahead = (DAY_KEYS.index(key) - ((int(now[6]) - 1) % 7)) % 7
+        if days_ahead == 0 and (hh < int(now[3]) or (hh == int(now[3]) and mm <= int(now[4]))):
+            days_ahead = 7
+        target_day = d + days_ahead
+        # Datumberekening via mktime/localtime om maandgrenzen correct af te handelen.
+        target_ts = time.mktime((y, mo, target_day, hh, mm, 0, 0, 0))
+        target = time.localtime(target_ts)
+        target_key = (int(target[0]), int(target[1]), int(target[2]), hh, mm)
+
+        if self._skip_once_alarm == target_key:
+            self._skip_once_alarm = None
+            self._set_feedback_lines = [
+                "Skip geannuleerd:",
+                "{} {:02d}:{:02d}".format(day_map.get(key, nxt["day"]), hh, mm),
+            ]
+            self._set_feedback("", ms=2500)
+            print("Skip geannuleerd {} {:02d}:{:02d}".format(day_map.get(key, nxt["day"]), hh, mm))
+            return
+
+        self._skip_once_alarm = target_key
         day_txt = day_map.get(key, nxt["day"])
         nxt_after = self._next_alarm_entry(include_disabled=False)
         lines = [
-            "Alarm uit op:",
+            "Alarm skip 1x:",
             "{} {:02d}:{:02d}".format(day_txt, hh, mm),
             "---",
         ]
@@ -1338,7 +1537,7 @@ class App:
             lines += ["Geen volgend", "alarm actief"]
         self._set_feedback_lines = lines
         self._set_feedback("", ms=3500)
-        print("Alarm UIT {} {:02d}:{:02d}".format(day_txt, hh, mm))
+        print("Alarm 1x skip {} {:02d}:{:02d}".format(day_txt, hh, mm))
 
     def _toggle_today_alarm(self):
         day_key, row = self._current_day_alarm()
@@ -1494,8 +1693,8 @@ class App:
         if self.wifi_disabled:
             # WiFi was uit: zet aan en reset auto-off timer
             self.wifi_disabled = False
-            self.wifi_auto_off_ms = time.ticks_add(time.ticks_ms(), 30 * 60 * 1000)
-            print("WiFi AAN (auto-uit over 30 min)")
+            self.wifi_auto_off_ms = self._next_wifi_auto_off_deadline()
+            print("WiFi AAN{}".format(" (blijft aan)" if self.wifi_keep_alive else " (auto-uit over 30 min)"))
             if self._ensure_wifi_connected():
                 ip = self.wifi.get_ip() if self.wifi else None
                 print("WiFi verbonden:", ip if ip else "geen IP")
@@ -1590,7 +1789,7 @@ class App:
         if not df_ready and DFPlayer is not None and not self._dfplayer_failed:
             print("! DFPlayer niet klaar voor alarmstart")
 
-        # --- DFPlayer: herhaal het geselecteerde lied totdat alarm eindigt ---
+        # --- DFPlayer: herhaal bij echte alarmen, speel eenmalig bij preview ---
         if self.dfplayer is not None:
             try:
                 # Track 0001.mp3 is reserved for intro, so alarm tones map to +1.
@@ -1621,6 +1820,10 @@ class App:
                         restart_needed = True
 
                 if restart_needed:
+                    # Preview-modus: stop zodra het nummer klaar is of de fallback-interval bereikt is.
+                    if (not self._alarm_repeat_track) and self._dfplayer_playing:
+                        self._stop_alarm()
+                        return
                     self.dfplayer.play_mp3(track)
                     print("DFPlayer: speel track {} (tone {}), volume {}".format(track, tone_num, dfvol))
                     self._dfplayer_playing = True
@@ -1715,12 +1918,20 @@ class App:
         c.send(resp.encode())
 
     def _weekday_name(self, idx):
-        names = ("Maandag", "Dinsdag", "Woensdag", "Donderdag", "Vrijdag", "Zaterdag", "Zondag")
+        names = (
+            ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+            if self.ui_language == "en"
+            else
+            ("Maandag", "Dinsdag", "Woensdag", "Donderdag", "Vrijdag", "Zaterdag", "Zondag")
+        )
         return names[(int(idx) - 1) % 7]
 
     def _weekday_short(self, idx):
-        names = ("ma", "di", "wo", "do", "vr", "za", "zo")
+        names = ("mo", "tu", "we", "th", "fr", "sa", "su") if self.ui_language == "en" else ("ma", "di", "wo", "do", "vr", "za", "zo")
         return names[(int(idx) - 1) % 7]
+
+    def _lang(self, nl_text, en_text):
+        return en_text if self.ui_language == "en" else nl_text
 
     def _next_alarm_info(self, t):
         # Returns (day_str, hh, mm) for next alarm, or None if none
@@ -1948,7 +2159,7 @@ class App:
                 py = (time.ticks_ms() * 7  + i * 19) % 64
                 self.display.pixel(px, py, 1)
             self.display.text("RETRO GEORGY", 8, 28, 1)
-            self.display.text("loading...", 24, 42, 1)
+            self.display.text(self._lang("laden...", "loading..."), 24, 42, 1)
             self.display.show()
 
         # DFPlayer initialiseren en track 999 afspelen
@@ -2170,9 +2381,9 @@ class App:
                 time.sleep_ms(80)
 
             # Lange WiFi reveal (zelfde gevoel/duur), maar geheugen-zuinig getekend.
-            GEVONDEN = "GEVONDEN!"
-            SSID_LABEL = "VERBONDEN MET"
-            IP_LABEL = "IP ADRES"
+            GEVONDEN = self._lang("GEVONDEN!", "FOUND!")
+            SSID_LABEL = self._lang("VERBONDEN MET", "CONNECTED TO")
+            IP_LABEL = self._lang("IP ADRES", "IP ADDRESS")
             ssid_str = _safe_ascii_text(self.wifi_ssid or "onbekend", max_chars=16)
             ip_str = _safe_ascii_text(ip if ip else "geen WiFi", max_chars=16)
 
@@ -2265,10 +2476,20 @@ class App:
 
     def _draw_startup_ip(self):
         self.display.fill(0)
-        self.display.text("WiFi verbonden", 8, 8, 1)
+        self.display.text(self._lang("WiFi verbonden", "WiFi connected"), 8, 8, 1)
         ip = self.wifi.get_ip() if self.wifi_ok else None
-        self.display.text("IP adres:", 8, 26, 1)
-        self.display.text(ip if ip else "geen netwerk", 8, 40, 1)
+        self.display.text(self._lang("IP adres:", "IP address:"), 8, 26, 1)
+        self.display.text(ip if ip else self._lang("geen netwerk", "no network"), 8, 40, 1)
+        self.display.show()
+
+    def _draw_setup_mode(self):
+        self.display.fill(0)
+        self.display.text(self._lang("INSTEL MODUS", "SETUP MODE"), 20, 2, 1)
+        self.display.hline(0, 11, 128, 1)
+        self.display.text(self.setup_ap_ssid[:16], 0, 20, 1)
+        self.display.text(self._get_setup_ip()[:16], 0, 30, 1)
+        self.display.text(self._lang("OPEN IN BROWSER", "OPEN IN BROWSER"), 0, 42, 1)
+        self.display.text(self._lang("SLA WIFI OP", "SAVE WIFI VIA WEB"), 0, 52, 1)
         self.display.show()
 
     def _draw_wifi_intro_style_icon(self, x, y, rings=3):
@@ -2427,6 +2648,8 @@ class App:
 
     def _check_weather_fetch(self):
         """Roep dit aan vanuit de main loop. Zet WiFi tijdelijk aan als nodig."""
+        if self.setup_mode:
+            return
         if not self.config or not self.config.get("weather", "enabled", True):
             return
         now_ms = time.ticks_ms()
@@ -3619,6 +3842,8 @@ class App:
     def _open_gif_by_name(self, name):
         if not name:
             return False
+        if self._gif_runtime_failed:
+            return False
         path = "/{}.bin".format(name)
         try:
             f = open(path, "rb")
@@ -3628,18 +3853,30 @@ class App:
             magic = f.read(2)
             if magic != bytes([0x47, 0xAF]):
                 f.close()
+                self._gif_runtime_failed = True
                 return False
-            n = (f.read(1)[0] << 8) | f.read(1)[0]
-            w = f.read(1)[0]
-            h = f.read(1)[0]
+            b = f.read(4)
+            if len(b) != 4:
+                f.close()
+                self._gif_runtime_failed = True
+                return False
+            n = (b[0] << 8) | b[1]
+            w = b[2]
+            h = b[3]
             if w != 128 or h != 64:
                 print("GIF alarm: verwacht 128x64, got {}x{}".format(w, h))
                 f.close()
+                self._gif_runtime_failed = True
                 return False
             delays = []
             for _ in range(n):
-                hi = f.read(1)[0]
-                lo = f.read(1)[0]
+                d = f.read(2)
+                if len(d) != 2:
+                    f.close()
+                    self._gif_runtime_failed = True
+                    return False
+                hi = d[0]
+                lo = d[1]
                 delays.append((hi << 8) | lo)
             self._gif_file = f
             self._gif_n_frames = n
@@ -3648,6 +3885,7 @@ class App:
             self._gif_cur_frame = 0
             self._gif_data_offset = f.tell()
             self._gif_next_ms = 0
+            self._gif_runtime_failed = False
             print("GIF alarm: {} frames geladen uit {}".format(n, path))
             return True
         except Exception as e:
@@ -3656,36 +3894,33 @@ class App:
                 f.close()
             except Exception:
                 pass
-            self._gif_file = None
-            self._gif_delays = []
+            self._disable_gif_for_alarm("open fout")
             return False
 
     def _draw_gif_alarm_frame(self):
         now = time.ticks_ms()
         if time.ticks_diff(now, self._gif_next_ms) < 0:
-            return
+            return True
         try:
             self._gif_file.seek(self._gif_data_offset + self._gif_cur_frame * self._gif_frame_size)
-            raw = self._gif_file.read(self._gif_frame_size)
-            if len(raw) == self._gif_frame_size:
-                import framebuf as _fb
-                fb = _fb.FrameBuffer(bytearray(raw), 128, 64, _fb.MONO_VLSB)
-                self.display.fill(0)
-                self.display.blit(fb, 0, 0)
-                self.display.show()
-                delay = self._gif_delays[self._gif_cur_frame]
-                if delay < 20:
-                    delay = 100
-                self._gif_next_ms = time.ticks_add(now, delay)
-                self._gif_cur_frame = (self._gif_cur_frame + 1) % self._gif_n_frames
+            n = self._gif_file.readinto(self._gif_frame_buf)
+            if n != self._gif_frame_size:
+                raise OSError("onvolledige GIF frame data")
+            self.display.fill(0)
+            self.display.blit(self._gif_fb, 0, 0)
+            self.display.show()
+            delay = self._gif_delays[self._gif_cur_frame]
+            if delay < 20:
+                delay = 100
+            elif delay > 500:
+                delay = 500
+            self._gif_next_ms = time.ticks_add(now, delay)
+            self._gif_cur_frame = (self._gif_cur_frame + 1) % self._gif_n_frames
+            return True
         except Exception as e:
             print("GIF alarm frame fout:", e)
-            try:
-                self._gif_file.close()
-            except Exception:
-                pass
-            self._gif_file = None
-            self._gif_delays = []
+            self._disable_gif_for_alarm("frame decode fout")
+            return False
 
     def _draw_alarm_controls_overlay(self, frame):
         # Toon STOP/SNOOZE hint: 2s aan, 5s uit (7s periode).
@@ -3701,17 +3936,20 @@ class App:
         intensity = self._alarm_intensity()
         # GIF-animatie als actieve gif ingesteld is
         gif_name = getattr(self, 'active_gif', '')
-        if self._gif_file is None and gif_name:
+        if self._gif_file is None and gif_name and not self._gif_runtime_failed:
             self._open_gif_by_name(gif_name)
         if self._gif_file is not None:
-            self._draw_gif_alarm_frame()
-            boss = self._alarm_boss_level()
-            if boss > 0:
-                if boss >= 2 and (frame % 2 == 0):
-                    self.display.rect(0, 0, 128, 64, 1)
-            self._draw_alarm_controls_overlay(frame)
-            self.display.show()
-            return
+            if not self._draw_gif_alarm_frame():
+                # GIF-pad viel uit; val direct terug op standaard animatie in deze frame.
+                pass
+            else:
+                boss = self._alarm_boss_level()
+                if boss > 0:
+                    if boss >= 2 and (frame % 2 == 0):
+                        self.display.rect(0, 0, 128, 64, 1)
+                self._draw_alarm_controls_overlay(frame)
+                self.display.show()
+                return
         # Skip intro als _skip_intro is ingesteld (bijv. test-alarm)
         if not self._skip_intro and elapsed < ALARM_INTRO_MS:
             self._draw_alarm_intro(frame, tone)
@@ -3803,6 +4041,49 @@ class App:
             return h.decode("utf-8", "ignore"), b
         return data.decode("utf-8", "ignore"), b""
 
+    def _validate_uploaded_bin_file(self, path):
+        """Valideer geuploade 1-bit animatie .bin op header, frames, delays en payload-grootte."""
+        try:
+            with open(path, "rb") as f:
+                magic = f.read(2)
+                if magic != bytes([0x47, 0xAF]):
+                    return False, "Ongeldige BIN header"
+
+                b = f.read(4)
+                if len(b) != 4:
+                    return False, "BIN header onvolledig"
+
+                n = (b[0] << 8) | b[1]
+                w = b[2]
+                h = b[3]
+
+                if w != 128 or h != 64:
+                    return False, "Animatie moet 128x64 zijn"
+                if n < 1 or n > 1200:
+                    return False, "Ongeldig aantal frames"
+
+                for _ in range(n):
+                    d = f.read(2)
+                    if len(d) != 2:
+                        return False, "Delay-tabel onvolledig"
+                    delay = (d[0] << 8) | d[1]
+                    if delay < 20 or delay > 5000:
+                        return False, "Frame delay buiten bereik (20..5000 ms)"
+
+                frame_size = (w * h) // 8
+                expected = n * frame_size
+                data = f.read(expected)
+                if len(data) != expected:
+                    return False, "Frame data onvolledig"
+
+                if f.read(1):
+                    return False, "Onverwachte extra bytes in bestand"
+
+        except Exception as e:
+            return False, "Validatie fout: {}".format(e)
+
+        return True, "ok"
+
     def _handle_upload_bin(self, c, headers_raw, body_buf, path):
         """Stream binaire .bin upload naar alarm_gifs/<naam>.bin"""
         import uos as _uos
@@ -3874,6 +4155,16 @@ class App:
                 pass
             c.send(self._json({"ok": False, "error": "Upload onvolledig ({}/{} bytes)".format(written, cl)}))
             return
+
+        ok, msg = self._validate_uploaded_bin_file(dest)
+        if not ok:
+            try:
+                _uos.remove(dest)
+            except Exception:
+                pass
+            c.send(self._json({"ok": False, "error": "BIN preflight afgekeurd: {}".format(msg)}))
+            return
+
         print("GIF upload opgeslagen:", dest, written, "bytes")
         c.send(self._json({"ok": True, "name": safe + ".bin", "bytes": written}))
 
@@ -3986,8 +4277,15 @@ class App:
                 "year": t[0], "month": t[1], "day": t[2],
                 "hour": t[3], "minute": t[4], "second": t[5],
                 "weekday": t[6], "weekday_name": self._weekday_name(t[6]),
+                "weekday_short": self._weekday_short(t[6]),
                 "timezone_name": self.clock.timezone_name,
                 "timezone_label": self.clock.timezone_label(),
+                "ui_language": self.ui_language,
+                "boot_mode": self._get_boot_mode(),
+                "setup_mode": self.setup_mode,
+                "setup_ap_ssid": self.setup_ap_ssid,
+                "setup_ip": self._get_setup_ip(),
+                "wifi_ssid": self.wifi_ssid,
                 "alarm_tone": self.tone,
                 "alarm_volume": self.volume,
                 "alarm_schedule": self.alarm_schedule,
@@ -3999,6 +4297,8 @@ class App:
                 "storage": self._get_storage_info(),
                 "gif_tone_map": self._merged_gif_tone_map(),
                 "gif_led_map": self._merged_gif_led_map(),
+                "wifi_keep_alive": self.wifi_keep_alive,
+                "weather_updates_per_day": self.weather_updates_per_day,
                 "weather_place": self.config.get("weather", "place", "Zevenaar") if self.config else "Zevenaar",
                 "weather_latitude": self.config.get("weather", "latitude", 51.92) if self.config else 51.92,
                 "weather_longitude": self.config.get("weather", "longitude", 6.08) if self.config else 6.08
@@ -4020,6 +4320,14 @@ class App:
             if self.config:
                 self.config.set("ntp", "timezone", tz)
             c.send(self._json({"ok": True}))
+            return
+        if method == "POST" and path == "/api/set-language":
+            d = self._parse(req)
+            lang = self._normalize_ui_language(d.get("language", self.ui_language))
+            self.ui_language = lang
+            if self.config:
+                self.config.set("ui", "language", lang)
+            c.send(self._json({"ok": True, "ui_language": self.ui_language}))
             return
         if method == "POST" and path == "/api/sync-ntp":
             ok = self.clock.sync_ntp()
@@ -4068,6 +4376,42 @@ class App:
             except Exception as _e:
                 c.send(self._json({"ok": False, "error": str(_e)}))
             return
+        if method == "POST" and path == "/api/set-network-settings":
+            d = self._parse(req)
+            self.wifi_keep_alive = bool(d.get("wifi_keep_alive", self.wifi_keep_alive))
+            self.weather_updates_per_day = self._normalize_weather_updates_per_day(d.get("weather_updates_per_day", self.weather_updates_per_day))
+            self._apply_network_settings(reset_wifi_timer=True)
+            if self.config:
+                self.config.set("wifi", "keep_alive", self.wifi_keep_alive)
+                self.config.set("weather", "updates_per_day", self.weather_updates_per_day)
+                self.config.set("weather", "interval_s", int(self._weather_interval_ms // 1000))
+            c.send(self._json({
+                "ok": True,
+                "wifi_keep_alive": self.wifi_keep_alive,
+                "weather_updates_per_day": self.weather_updates_per_day,
+            }))
+            return
+        if method == "POST" and path == "/api/set-wifi-credentials":
+            d = self._parse(req)
+            ssid = str(d.get("ssid", "") or "").strip()
+            password = str(d.get("password", "") or "")
+            if not ssid:
+                c.send(self._json({"ok": False, "error": "SSID ontbreekt"}))
+                return
+            if not self.config:
+                c.send(self._json({"ok": False, "error": "Configuratie niet beschikbaar"}))
+                return
+            if not self.config.set_wifi_credentials(ssid, password, keep_alive=self.wifi_keep_alive):
+                c.send(self._json({"ok": False, "error": "Opslaan WiFi mislukt"}))
+                return
+            self.wifi_ssid = ssid
+            self.wifi_password = password
+            self._set_feedback_lines = ["WiFi opgeslagen:", ssid[:16], "Herstart..."]
+            self._set_feedback("", ms=2500)
+            print("WiFi credentials opgeslagen voor:", ssid)
+            self._schedule_restart(1200)
+            c.send(self._json({"ok": True, "restart": True, "ssid": ssid}))
+            return
         if method == "POST" and path == "/api/set-alarm-schedule":
             d = self._parse(req)
             self.alarm_schedule = self._normalize_alarm_schedule(d.get("alarm_schedule", {}))
@@ -4097,8 +4441,12 @@ class App:
             return
         if method == "POST" and path == "/api/test-alarm":
             d = self._parse(req)
-            sec = int(d.get("seconds", 10) or 10)
-            sec = max(1, min(60, sec))
+            try:
+                sec = int(d.get("seconds", 0) or 0)
+            except Exception:
+                sec = 0
+            if sec > 0:
+                sec = max(1, min(60, sec))
             tone = self._normalize_tone_key(d.get("tone", self._tone_now()))
             led_tone = self._normalize_tone_key(d.get("led_tone", tone))
             animation = d.get("animation", "")
@@ -4144,8 +4492,13 @@ class App:
             # Skip intro voor test-alarm (geen boot-intro gewenst)
             self._skip_intro = True
             self._in_intro = False
+            self._alarm_repeat_track = (sec > 0)
             self.alarm_started_ms = time.ticks_ms()
-            self.alarm_until = time.ticks_add(time.ticks_ms(), sec * 1000)
+            if sec > 0:
+                self.alarm_until = time.ticks_add(time.ticks_ms(), sec * 1000)
+            else:
+                # Geen vaste timeout: stop handmatig, bij volgende start, of na einde track in preview-modus.
+                self.alarm_until = time.ticks_add(time.ticks_ms(), 24 * 3600 * 1000)
             c.send(self._json({"ok": True}))
             return
         if method == "POST" and path == "/api/test-transition":
@@ -4307,6 +4660,10 @@ class App:
         gc_counter = 0
         while True:
             try:
+                if self._pending_restart_ms is not None and time.ticks_diff(time.ticks_ms(), self._pending_restart_ms) >= 0:
+                    import machine as _machine
+                    print("Herstart na config-wijziging...")
+                    _machine.reset()
                 self._status_led_tick += 1
                 if self._status_led_tick >= 50:
                     self._board_led_off()
@@ -4333,6 +4690,7 @@ class App:
                         if time.ticks_diff(time.ticks_ms(), self.snooze_until) >= 0:
                             self.active_tone = self._normalize_tone_key(self.snooze_tone if self.snooze_tone else self._tone_now())
                             self.active_gif = self.snooze_gif if self.snooze_gif else ""
+                            self._alarm_repeat_track = True
                             self.alarm_started_ms = time.ticks_ms()
                             self.alarm_until = time.ticks_add(time.ticks_ms(), ALARM_AUTO_STOP_MS)
                             self.snooze_until = None
@@ -4346,7 +4704,9 @@ class App:
 
                 if self.display:
                     self._apply_display_brightness()
-                    if self.alarm_until is not None:
+                    if self.setup_mode:
+                        self._draw_setup_mode()
+                    elif self.alarm_until is not None:
                         self._draw_alarm_animation(frame)
                         self._update_led_animation(frame)
                     elif self.alarm_edit_mode:
@@ -4378,4 +4738,5 @@ class App:
 if __name__ == "__main__":
     app = App()
     app.run()
+
 

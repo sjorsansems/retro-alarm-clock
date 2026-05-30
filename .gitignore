@@ -3,3 +3,5 @@ __pycache__/
 archive/
 firmware/
 .vscode/
+config.json
+*.local.json

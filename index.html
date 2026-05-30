@@ -131,7 +131,7 @@ button.ghost{background:#5d7280}
 
   <div class="card">
     <h3>&#127916; Animaties beheren</h3>
-    <p style="font-size:13px;color:var(--muted);margin:0 0 10px">Upload een geconverteerde .bin animatie naar de klok. Converteer eerst een GIF op je PC met <code>tools/gif_to_frames.py --bin</code>.</p>
+    <p style="font-size:13px;color:var(--muted);margin:0 0 10px">Upload een geconverteerde .bin animatie naar de klok. Converteer eerst een GIF op je PC met <code>tools/gif_to_frames.py --bin</code>. Preview speelt door tot stop, volgende preview, of einde van het liedje.</p>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
       <input type="file" id="gifBinInput" accept=".bin" style="flex:1;min-width:0;font-size:13px">
       <button onclick="uploadGifBin()" id="uploadGifBtn">&#11014; Uploaden</button>
@@ -661,9 +661,8 @@ async function previewGif(name){
   let ledTone=ledSel&&ledSel.value?String(ledSel.value):(gifLedMap[name]||tone)
   if(!tone)tone='1'
   if(!ledTone)ledTone=tone
-  const seconds=Number(document.getElementById('testSecondsInput')?.value||10)
   const out=await apiPost('/api/test-alarm',{
-    seconds,
+    seconds:0,
     tone:String(tone),
     led_tone:String(ledTone),
     animation:'gif:'+name

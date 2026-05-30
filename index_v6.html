@@ -5,28 +5,95 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>ESP32 Alarm</title>
 <style>
-:root{--bg:#eef3f6;--card:#ffffff;--ink:#173042;--muted:#637684;--line:#cfdbe3;--accent:#0b7fab;--accent2:#e98a15}
-body{margin:0;padding:14px;background:linear-gradient(180deg,#edf4f8,#dde9ef);color:var(--ink);font-family:Verdana,sans-serif}
-.wrap{max-width:860px;margin:0 auto}
-.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:12px;box-shadow:0 8px 24px rgba(18,48,66,.08)}
+:root{--bg:#141223;--card:#201a36;--ink:#f8f5e4;--muted:#b7b3cf;--line:#4d4472;--accent:#1fd3c5;--accent2:#ff9f1c;--danger:#ff4f64}
+*{box-sizing:border-box}
+body{
+  margin:0;
+  padding:14px;
+  color:var(--ink);
+  font-family:"Courier New",Consolas,monospace;
+  background:
+    radial-gradient(circle at 15% 20%, rgba(31,211,197,.12), transparent 35%),
+    radial-gradient(circle at 85% 80%, rgba(255,79,100,.12), transparent 38%),
+    repeating-linear-gradient(0deg, rgba(255,255,255,.035) 0 2px, rgba(0,0,0,.03) 2px 4px),
+    linear-gradient(180deg, #100c1c 0%, #19132a 55%, #120f1f 100%);
+}
+.wrap{max-width:960px;margin:0 auto}
+.card{
+  background:linear-gradient(180deg,#261e42,#211a37);
+  border:3px solid var(--line);
+  border-radius:0;
+  padding:14px;
+  margin-bottom:12px;
+  box-shadow:6px 6px 0 #0c0a16, inset 0 0 0 2px rgba(255,255,255,.03);
+}
 .hero{display:flex;justify-content:space-between;gap:12px;align-items:flex-end;flex-wrap:wrap}
-.clock{font-size:42px;font-weight:700;letter-spacing:.04em;color:var(--accent)}
-.sub{color:var(--muted);margin-top:4px}
-.status{font-size:14px;padding:10px 12px;border-radius:10px;background:#e8f4f8;color:#16546d}
+.clock{
+  font-size:46px;
+  font-weight:700;
+  letter-spacing:.06em;
+  color:var(--accent);
+  text-shadow:0 0 10px rgba(31,211,197,.35);
+}
+.sub{color:var(--muted);margin-top:6px}
+.status{
+  font-size:14px;
+  padding:10px 12px;
+  border:2px solid #2f9b95;
+  border-radius:0;
+  background:#10282d;
+  color:#8bfff4;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.04);
+}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
 .row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.tone-scheme{margin-top:10px;padding:10px 12px;border:1px dashed var(--line);border-radius:10px;background:#f7fbfd;color:#24485c;font-size:14px}
-.meter{height:10px;background:#e6eef3;border-radius:8px;overflow:hidden;margin:8px 0}
-.meter>span{display:block;height:100%;background:#0b7fab;width:0%}
-label{display:block;font-size:13px;font-weight:700;margin-bottom:6px}
-input,select,button{width:100%;box-sizing:border-box;border-radius:10px;border:1px solid var(--line);padding:10px 12px;font-size:15px}
-button{background:var(--accent);border:0;color:#fff;font-weight:700;cursor:pointer}
-button.alt{background:var(--accent2)}
-button.ghost{background:#5d7280}
+.tone-scheme{
+  margin-top:10px;
+  padding:10px 12px;
+  border:2px dashed #4c6a88;
+  border-radius:0;
+  background:#1b263a;
+  color:#d1eeff;
+  font-size:14px;
+}
+.meter{height:12px;background:#1a1730;border:2px solid #4b4271;border-radius:0;overflow:hidden;margin:8px 0}
+.meter>span{display:block;height:100%;background:linear-gradient(90deg,#29d7c8,#66ff99);width:0%}
+label{display:block;font-size:13px;font-weight:700;margin-bottom:6px;color:#e8e5f8}
+input,select,button{
+  width:100%;
+  border-radius:0;
+  border:2px solid #4e4575;
+  padding:10px 12px;
+  font-size:14px;
+  font-family:inherit;
+}
+input,select{background:#17142a;color:var(--ink)}
+input:focus,select:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 2px rgba(31,211,197,.2)}
+button{
+  background:linear-gradient(180deg,#2dd7c8,#16a99f);
+  color:#061417;
+  font-weight:700;
+  cursor:pointer;
+  text-transform:uppercase;
+  letter-spacing:.03em;
+  transition:transform .05s ease;
+}
+button:hover{filter:brightness(1.06)}
+button:active{transform:translateY(1px)}
+button.alt{background:linear-gradient(180deg,#ffb347,#f18a00);color:#2a1400}
+button.ghost{background:linear-gradient(180deg,#7b6b9d,#5b5074);color:#f5f2ff}
 .schedule{display:grid;gap:8px}
-.day{display:grid;grid-template-columns:72px 100px 110px 1fr;gap:10px;align-items:center;padding:8px 0;border-top:1px solid #edf2f5}
+.day{display:grid;grid-template-columns:72px 100px 110px 1fr;gap:10px;align-items:center;padding:10px 0;border-top:2px dotted #3e365f}
 .day:first-child{border-top:0}
 .tiny{font-size:12px;color:var(--muted)}
+h3{
+  margin:0 0 10px;
+  font-size:16px;
+  letter-spacing:.06em;
+  color:#fff8cb;
+  text-shadow:2px 2px 0 rgba(0,0,0,.45);
+}
+code{background:#15112a;border:1px solid #4d4175;padding:1px 5px;border-radius:0;color:#c8f7ff}
 @media (max-width:640px){.day{grid-template-columns:1fr;grid-template-rows:auto auto auto auto}.clock{font-size:34px}}
 </style>
 </head>
@@ -36,83 +103,121 @@ button.ghost{background:#5d7280}
     <div>
       <div class="clock" id="currentTime">--:--:--</div>
       <div class="sub" id="currentDate">--</div>
+      <div class="tiny" id="bootModeLine">BOOT MODE: --</div>
     </div>
     <div class="status" id="statusBox">Verbonden</div>
   </div>
 
   <div class="grid">
     <div class="card">
-      <h3>Tijd</h3>
+      <h3 id="timeTitle">Tijd</h3>
       <div class="row">
         <div>
-          <label for="timeInput">Tijd</label>
+          <label id="timeLabel" for="timeInput">Tijd</label>
           <input id="timeInput" type="time" value="12:00">
         </div>
         <div>
-          <label for="secInput">Seconde</label>
+          <label id="secondLabel" for="secInput">Seconde</label>
           <input id="secInput" type="number" min="0" max="59" value="0">
         </div>
       </div>
-      <p class="tiny">Direct handmatig de klok zetten.</p>
-      <button onclick="setTimeValue()">Tijd opslaan</button>
+      <p id="timeHint" class="tiny">Direct handmatig de klok zetten.</p>
+      <button id="saveTimeBtn" onclick="setTimeValue()">Tijd opslaan</button>
     </div>
 
     <div class="card">
-      <h3>NTP en Tijdzone</h3>
-      <label for="timezoneInput">Tijdzone</label>
-      <select id="timezoneInput">
-        <option value="Europe/Amsterdam">Europe/Amsterdam</option>
-        <option value="UTC">UTC</option>
-        <option value="UTC+1">UTC+1</option>
-        <option value="UTC+2">UTC+2</option>
-        <option value="UTC-1">UTC-1</option>
-        <option value="UTC-2">UTC-2</option>
+      <h3 id="ntpTitle">NTP en Tijdzone en taal</h3>
+      <label id="timezoneLabel" for="timezoneInput">Tijdzone</label>
+      <select id="timezoneInput"></select>
+      <label id="languageLabel" for="languageInput" style="margin-top:10px">Taal</label>
+      <select id="languageInput">
+        <option value="nl">Nederlands</option>
+        <option value="en">English</option>
       </select>
       <div class="row" style="margin-top:10px">
-        <button onclick="saveTimezone()">Tijdzone opslaan</button>
-        <button class="alt" onclick="syncNtp()">Sync met NTP</button>
+        <button id="saveTimezoneBtn" onclick="saveTimezone()">Tijdzone opslaan</button>
+        <button id="syncNtpBtn" class="alt" onclick="syncNtp()">Sync met NTP</button>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button id="saveLanguageBtn" class="ghost" onclick="saveLanguage()">Taal opslaan</button>
       </div>
     </div>
   </div>
 
   <div class="card">
-    <h3>Alarm testen</h3>
+    <h3 id="alarmTestTitle">Alarm testen</h3>
     <div class="grid">
       <div>
-        <label for="testAnimationInput">Ingebouwde animaties</label>
+        <label id="testAnimationLabel" for="testAnimationInput">Ingebouwde animaties</label>
         <select id="testAnimationInput"></select>
-        <div class="tiny" style="margin-top:6px">Alleen Zelda t/m Arcade voor snelle alarmtest.</div>
+        <div id="testAnimationHint" class="tiny" style="margin-top:6px">Alleen Zelda t/m Arcade voor snelle alarmtest.</div>
       </div>
       <div>
-        <label for="volumeInput">Volume %</label>
+        <label id="volumeLabel" for="volumeInput">Volume %</label>
         <input id="volumeInput" type="number" min="0" max="100" value="70">
       </div>
       <div>
-        <label for="testSecondsInput">Testduur (seconden)</label>
+        <label id="testSecondsLabel" for="testSecondsInput">Testduur (seconden)</label>
         <input id="testSecondsInput" type="number" min="1" max="60" value="10">
       </div>
     </div>
     <div class="row" style="margin-top:10px">
-      <button onclick="saveAlarmSettings()">Volume opslaan</button>
-      <button class="alt" onclick="testAlarm()">▶️ Alarm testen</button>
+      <button id="saveAlarmSettingsBtn" onclick="saveAlarmSettings()">Volume opslaan</button>
+      <button id="testAlarmBtn" class="alt" onclick="testAlarm()">▶️ Alarm testen</button>
     </div>
     <div class="tone-scheme" id="toneScheme">LED-effect: -</div>
   </div>
 
   <div class="card">
-    <h3>Weerlocatie</h3>
+    <h3 id="weatherTitle">Weerlocatie</h3>
     <div class="grid">
       <div>
-        <label for="weatherPlaceInput">Plaatsnaam</label>
+        <label id="weatherPlaceLabel" for="weatherPlaceInput">Plaatsnaam</label>
         <input id="weatherPlaceInput" type="text" placeholder="Bijv. Zevenaar">
       </div>
       <div>
-        <label>Gevonden locatie</label>
+        <label id="weatherFoundLabel">Gevonden locatie</label>
         <div class="status" id="weatherPlaceInfo">Nog niet ingesteld</div>
       </div>
     </div>
-    <p class="tiny">Zoek een plaatsnaam op. De klok bewaart daarna de juiste coordinaten voor weer en temperatuur op het display.</p>
-    <button onclick="saveWeatherLocation()">Plaats opslaan</button>
+    <p id="weatherHint" class="tiny">Zoek een plaatsnaam op. De klok bewaart daarna de juiste coordinaten voor weer en temperatuur op het display.</p>
+    <button id="saveWeatherBtn" onclick="saveWeatherLocation()">Plaats opslaan</button>
+  </div>
+
+  <div class="card">
+    <h3 id="networkTitle">WiFi en Weer</h3>
+    <div class="grid">
+      <div>
+        <label id="weatherUpdatesLabel" for="weatherUpdatesInput">Weer-updates per dag</label>
+        <input id="weatherUpdatesInput" type="number" min="1" max="24" value="4">
+      </div>
+      <div>
+        <label id="wifiKeepAliveLabel" for="wifiKeepAliveInput">WiFi actief houden</label>
+        <select id="wifiKeepAliveInput">
+          <option id="wifiKeepAliveNo" value="0">Nee, wifi mag verbreken</option>
+          <option id="wifiKeepAliveYes" value="1">Ja, wifi nooit automatisch uit</option>
+        </select>
+      </div>
+    </div>
+    <p id="networkHint" class="tiny">Bepaal hoe vaak het weer wordt opgehaald en of WiFi automatisch uit mag na idle- of sync-momenten.</p>
+    <button id="saveNetworkBtn" onclick="saveNetworkSettings()">Netwerkinstellingen opslaan</button>
+  </div>
+
+  <div class="card">
+    <h3 id="wifiSetupTitle">WiFi Setup</h3>
+    <div class="grid">
+      <div>
+        <label id="wifiSsidLabel" for="wifiSsidInput">WiFi naam (SSID)</label>
+        <input id="wifiSsidInput" type="text" placeholder="Bijv. MijnWifi">
+      </div>
+      <div>
+        <label id="wifiPasswordLabel" for="wifiPasswordInput">WiFi wachtwoord</label>
+        <input id="wifiPasswordInput" type="password" placeholder="Wachtwoord">
+      </div>
+    </div>
+    <div class="status" id="wifiSetupState" style="margin-top:10px">Normale WiFi-modus</div>
+    <p id="wifiSetupHint" class="tiny">Als de klok geen WiFi vindt, start hij een access point met naam <strong>AlarmKlok-Setup</strong> op <strong>192.168.4.1</strong>. Sla hier nieuwe WiFi-gegevens op; de klok herstart daarna automatisch.</p>
+    <button id="saveWifiBtn" onclick="saveWiFiCredentials()">WiFi opslaan</button>
   </div>
 
   <div class="card">
@@ -131,7 +236,7 @@ button.ghost{background:#5d7280}
 
   <div class="card">
     <h3>&#127916; Animaties beheren</h3>
-    <p style="font-size:13px;color:var(--muted);margin:0 0 10px">Upload een geconverteerde .bin animatie naar de klok. Converteer eerst een GIF op je PC met <code>tools/gif_to_frames.py --bin</code>.</p>
+    <p style="font-size:13px;color:var(--muted);margin:0 0 10px">Upload een geconverteerde .bin animatie naar de klok. Converteer eerst een GIF op je PC met <code>tools/gif_to_frames.py --bin</code>. Preview speelt door tot stop, volgende preview, of einde van het liedje.</p>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
       <input type="file" id="gifBinInput" accept=".bin" style="flex:1;min-width:0;font-size:13px">
       <button onclick="uploadGifBin()" id="uploadGifBtn">&#11014; Uploaden</button>
@@ -189,7 +294,133 @@ button.ghost{background:#5d7280}
 </div>
 
 <script>
-const days=[['mon','Maandag'],['tue','Dinsdag'],['wed','Woensdag'],['thu','Donderdag'],['fri','Vrijdag'],['sat','Zaterdag'],['sun','Zondag']]
+const days=['mon','tue','wed','thu','fri','sat','sun']
+const DAY_LABELS={
+  nl:{mon:'Maandag',tue:'Dinsdag',wed:'Woensdag',thu:'Donderdag',fri:'Vrijdag',sat:'Zaterdag',sun:'Zondag'},
+  en:{mon:'Monday',tue:'Tuesday',wed:'Wednesday',thu:'Thursday',fri:'Friday',sat:'Saturday',sun:'Sunday'}
+}
+const I18N={
+  nl:{
+    timeTitle:'Tijd',
+    timeLabel:'Tijd',
+    secondLabel:'Seconde',
+    timeHint:'Direct handmatig de klok zetten.',
+    saveTimeBtn:'Tijd opslaan',
+    connected:'Verbonden en bijgewerkt',
+    fetchError:'Fout bij ophalen status',
+    timeSaved:'Tijd opgeslagen',
+    timeSaveFail:'Tijd opslaan mislukt',
+    tzSaved:'Tijdzone opgeslagen',
+    tzSaveFail:'Tijdzone opslaan mislukt',
+    ntpOk:'NTP sync gelukt',
+    ntpFail:'NTP sync mislukt',
+    settingsSaved:'Instellingen opgeslagen',
+    settingsSaveFail:'Instellingen opslaan mislukt',
+    weatherSaved:'Weerlocatie opgeslagen',
+    weatherNotFound:'Niet gevonden',
+    weatherSaveFail:'Weerlocatie opslaan mislukt',
+    networkSaved:'Netwerkinstellingen opgeslagen',
+    networkSaveFail:'Netwerkinstellingen opslaan mislukt',
+    wifiSaved:'WiFi opgeslagen voor {ssid}. De klok herstart nu.',
+    wifiSaveFail:'WiFi opslaan mislukt',
+    languageSaved:'Taal opgeslagen',
+    languageSaveFail:'Taal opslaan mislukt',
+    setupActive:'Setup actief: {ssid} via {ip}',
+    activeProfile:'Actief profiel: {ssid}',
+    unknown:'onbekend',
+    ntpTitle:'NTP en Tijdzone en taal',
+    timezoneLabel:'Tijdzone',
+    languageLabel:'Taal',
+    saveTimezoneBtn:'Tijdzone opslaan',
+    syncNtpBtn:'Sync met NTP',
+    saveLanguageBtn:'Taal opslaan'
+    ,
+    alarmTestTitle:'Alarm testen',
+    testAnimationLabel:'Ingebouwde animaties',
+    testAnimationHint:'Alleen Zelda t/m Arcade voor snelle alarmtest.',
+    volumeLabel:'Volume %',
+    testSecondsLabel:'Testduur (seconden)',
+    saveAlarmSettingsBtn:'Volume opslaan',
+    testAlarmBtn:'▶️ Alarm testen',
+    weatherTitle:'Weerlocatie',
+    weatherPlaceLabel:'Plaatsnaam',
+    weatherFoundLabel:'Gevonden locatie',
+    weatherHint:'Zoek een plaatsnaam op. De klok bewaart daarna de juiste coordinaten voor weer en temperatuur op het display.',
+    saveWeatherBtn:'Plaats opslaan',
+    networkTitle:'WiFi en Weer',
+    weatherUpdatesLabel:'Weer-updates per dag',
+    wifiKeepAliveLabel:'WiFi actief houden',
+    wifiKeepAliveNo:'Nee, wifi mag verbreken',
+    wifiKeepAliveYes:'Ja, wifi nooit automatisch uit',
+    networkHint:'Bepaal hoe vaak het weer wordt opgehaald en of WiFi automatisch uit mag na idle- of sync-momenten.',
+    saveNetworkBtn:'Netwerkinstellingen opslaan',
+    wifiSetupTitle:'WiFi Setup',
+    wifiSsidLabel:'WiFi naam (SSID)',
+    wifiPasswordLabel:'WiFi wachtwoord',
+    wifiSetupHint:'Als de klok geen WiFi vindt, start hij een access point met naam AlarmKlok-Setup op 192.168.4.1. Sla hier nieuwe WiFi-gegevens op; de klok herstart daarna automatisch.',
+    saveWifiBtn:'WiFi opslaan'
+  },
+  en:{
+    timeTitle:'Time',
+    timeLabel:'Time',
+    secondLabel:'Second',
+    timeHint:'Set the clock manually right away.',
+    saveTimeBtn:'Save time',
+    connected:'Connected and refreshed',
+    fetchError:'Failed to fetch status',
+    timeSaved:'Time saved',
+    timeSaveFail:'Failed to save time',
+    tzSaved:'Timezone saved',
+    tzSaveFail:'Failed to save timezone',
+    ntpOk:'NTP sync successful',
+    ntpFail:'NTP sync failed',
+    settingsSaved:'Settings saved',
+    settingsSaveFail:'Failed to save settings',
+    weatherSaved:'Weather location saved',
+    weatherNotFound:'Not found',
+    weatherSaveFail:'Failed to save weather location',
+    networkSaved:'Network settings saved',
+    networkSaveFail:'Failed to save network settings',
+    wifiSaved:'WiFi saved for {ssid}. The clock will reboot now.',
+    wifiSaveFail:'Failed to save WiFi',
+    languageSaved:'Language saved',
+    languageSaveFail:'Failed to save language',
+    setupActive:'Setup active: {ssid} via {ip}',
+    activeProfile:'Active profile: {ssid}',
+    unknown:'unknown',
+    ntpTitle:'NTP, Timezone and language',
+    timezoneLabel:'Timezone',
+    languageLabel:'Language',
+    saveTimezoneBtn:'Save timezone',
+    syncNtpBtn:'Sync with NTP',
+    saveLanguageBtn:'Save language',
+    alarmTestTitle:'Test alarm',
+    testAnimationLabel:'Built-in animations',
+    testAnimationHint:'Only Zelda to Arcade for quick alarm testing.',
+    volumeLabel:'Volume %',
+    testSecondsLabel:'Test duration (seconds)',
+    saveAlarmSettingsBtn:'Save volume',
+    testAlarmBtn:'▶️ Test alarm',
+    weatherTitle:'Weather location',
+    weatherPlaceLabel:'Place name',
+    weatherFoundLabel:'Resolved location',
+    weatherHint:'Look up a place name. The clock stores the correct coordinates for weather and temperature on the display.',
+    saveWeatherBtn:'Save location',
+    networkTitle:'WiFi and Weather',
+    weatherUpdatesLabel:'Weather updates per day',
+    wifiKeepAliveLabel:'Keep WiFi active',
+    wifiKeepAliveNo:'No, WiFi may disconnect',
+    wifiKeepAliveYes:'Yes, never auto turn off WiFi',
+    networkHint:'Set how often weather is fetched and whether WiFi may auto turn off after idle or sync moments.',
+    saveNetworkBtn:'Save network settings',
+    wifiSetupTitle:'WiFi Setup',
+    wifiSsidLabel:'WiFi name (SSID)',
+    wifiPasswordLabel:'WiFi password',
+    wifiSetupHint:'If the clock cannot find WiFi, it starts an access point named AlarmKlok-Setup at 192.168.4.1. Save new WiFi credentials here; the clock reboots automatically.',
+    saveWifiBtn:'Save WiFi'
+  }
+}
+let currentLanguage='nl'
 let editingUntil=0
 let tonesSignature=''
 let toneMap={}
@@ -233,6 +464,120 @@ function isEditing(){return Date.now()<editingUntil}
 function setStatus(text,isError){const box=document.getElementById('statusBox');box.textContent=text;box.style.background=isError?'#fdeaea':'#e8f4f8';box.style.color=isError?'#8f2929':'#16546d'}
 function bindEditor(id){const el=document.getElementById(id);if(!el)return;['focus','input','change'].forEach(evt=>el.addEventListener(evt,markEditing))}
 async function apiPost(url,payload){const res=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload||{})});return res.json().catch(()=>({ok:false}))}
+function tr(key,vars){
+  const dict=I18N[currentLanguage]||I18N.nl
+  let s=dict[key]||key
+  const v=vars||{}
+  Object.keys(v).forEach(k=>{s=s.replaceAll('{'+k+'}',String(v[k]))})
+  return s
+}
+function dayLabel(dayKey){
+  const labels=DAY_LABELS[currentLanguage]||DAY_LABELS.nl
+  return labels[dayKey]||dayKey
+}
+function setTxt(id,key){
+  const el=document.getElementById(id)
+  if(el)el.textContent=tr(key)
+}
+function getTimezoneOptions(){
+  return [
+    {value:'Europe/Amsterdam',label:'Europe/Amsterdam (DST)'},
+    {value:'UTC',label:'UTC+00:00'},
+    {value:'UTC-12',label:'UTC-12:00'},
+    {value:'UTC-11',label:'UTC-11:00'},
+    {value:'UTC-10',label:'UTC-10:00'},
+    {value:'UTC-9:30',label:'UTC-09:30'},
+    {value:'UTC-9',label:'UTC-09:00'},
+    {value:'UTC-8',label:'UTC-08:00'},
+    {value:'UTC-7',label:'UTC-07:00'},
+    {value:'UTC-6',label:'UTC-06:00'},
+    {value:'UTC-5',label:'UTC-05:00'},
+    {value:'UTC-4',label:'UTC-04:00'},
+    {value:'UTC-3:30',label:'UTC-03:30'},
+    {value:'UTC-3',label:'UTC-03:00'},
+    {value:'UTC-2',label:'UTC-02:00'},
+    {value:'UTC-1',label:'UTC-01:00'},
+    {value:'UTC+1',label:'UTC+01:00'},
+    {value:'UTC+2',label:'UTC+02:00'},
+    {value:'UTC+3',label:'UTC+03:00'},
+    {value:'UTC+3:30',label:'UTC+03:30'},
+    {value:'UTC+4',label:'UTC+04:00'},
+    {value:'UTC+4:30',label:'UTC+04:30'},
+    {value:'UTC+5',label:'UTC+05:00'},
+    {value:'UTC+5:30',label:'UTC+05:30'},
+    {value:'UTC+5:45',label:'UTC+05:45'},
+    {value:'UTC+6',label:'UTC+06:00'},
+    {value:'UTC+6:30',label:'UTC+06:30'},
+    {value:'UTC+7',label:'UTC+07:00'},
+    {value:'UTC+8',label:'UTC+08:00'},
+    {value:'UTC+8:45',label:'UTC+08:45'},
+    {value:'UTC+9',label:'UTC+09:00'},
+    {value:'UTC+9:30',label:'UTC+09:30'},
+    {value:'UTC+10',label:'UTC+10:00'},
+    {value:'UTC+10:30',label:'UTC+10:30'},
+    {value:'UTC+11',label:'UTC+11:00'},
+    {value:'UTC+12',label:'UTC+12:00'},
+    {value:'UTC+12:45',label:'UTC+12:45'},
+    {value:'UTC+13',label:'UTC+13:00'},
+    {value:'UTC+14',label:'UTC+14:00'}
+  ]
+}
+function populateTimezones(selected){
+  const sel=document.getElementById('timezoneInput')
+  if(!sel)return
+  const opts=getTimezoneOptions()
+  sel.innerHTML=opts.map(o=>`<option value="${o.value}">${o.label}</option>`).join('')
+  const target=selected||'Europe/Amsterdam'
+  if(!sel.querySelector(`option[value="${target}"]`)){
+    const custom=document.createElement('option')
+    custom.value=target
+    custom.textContent=target
+    sel.appendChild(custom)
+  }
+  sel.value=target
+}
+function applyLanguage(lang){
+  currentLanguage=(lang==='en'?'en':'nl')
+  document.documentElement.lang=currentLanguage
+  setTxt('ntpTitle','ntpTitle')
+  setTxt('timezoneLabel','timezoneLabel')
+  setTxt('languageLabel','languageLabel')
+  setTxt('saveTimezoneBtn','saveTimezoneBtn')
+  setTxt('syncNtpBtn','syncNtpBtn')
+  setTxt('saveLanguageBtn','saveLanguageBtn')
+  setTxt('timeTitle','timeTitle')
+  setTxt('timeLabel','timeLabel')
+  setTxt('secondLabel','secondLabel')
+  setTxt('timeHint','timeHint')
+  setTxt('saveTimeBtn','saveTimeBtn')
+  setTxt('alarmTestTitle','alarmTestTitle')
+  setTxt('testAnimationLabel','testAnimationLabel')
+  setTxt('testAnimationHint','testAnimationHint')
+  setTxt('volumeLabel','volumeLabel')
+  setTxt('testSecondsLabel','testSecondsLabel')
+  setTxt('saveAlarmSettingsBtn','saveAlarmSettingsBtn')
+  setTxt('testAlarmBtn','testAlarmBtn')
+  setTxt('weatherTitle','weatherTitle')
+  setTxt('weatherPlaceLabel','weatherPlaceLabel')
+  setTxt('weatherFoundLabel','weatherFoundLabel')
+  setTxt('weatherHint','weatherHint')
+  setTxt('saveWeatherBtn','saveWeatherBtn')
+  setTxt('networkTitle','networkTitle')
+  setTxt('weatherUpdatesLabel','weatherUpdatesLabel')
+  setTxt('wifiKeepAliveLabel','wifiKeepAliveLabel')
+  setTxt('wifiKeepAliveNo','wifiKeepAliveNo')
+  setTxt('wifiKeepAliveYes','wifiKeepAliveYes')
+  setTxt('networkHint','networkHint')
+  setTxt('saveNetworkBtn','saveNetworkBtn')
+  setTxt('wifiSetupTitle','wifiSetupTitle')
+  setTxt('wifiSsidLabel','wifiSsidLabel')
+  setTxt('wifiPasswordLabel','wifiPasswordLabel')
+  const setupHint=document.getElementById('wifiSetupHint')
+  if(setupHint){
+    setupHint.innerHTML=tr('wifiSetupHint')
+  }
+  setTxt('saveWifiBtn','saveWifiBtn')
+}
 function updateToneScheme(){const sel=document.getElementById('testAnimationInput');const box=document.getElementById('toneScheme');if(!sel||!box)return;const choice=parseAnimationValue(sel.value);let tone=choice.tone;if(!tone&&choice.gif&&gifToneMap[choice.gif])tone=gifToneMap[choice.gif];const t=toneMap[tone];if(!t){box.textContent='LED-effect: onbekend';return}box.textContent=`LED-effect (${t.label}): ${t.scheme||'onbekend'}`}
 
 const BUILTIN_GIFS=['mario','zelda','doom','fire','heartbeat','matrix','pacman','pong','radar','skull','snake','space','ufo','donkey','knight_rider']
@@ -382,8 +727,8 @@ function renderTestAnimations(toneOptions){
 function renderSchedule(schedule, toneOptions, alarmCombo, alarmGifCombo){
   const root=document.getElementById('scheduleRoot')
   const animationOptionsHtml=buildScheduleAnimationOptions(toneOptions)
-  root.innerHTML=days.map(([key,label])=>{const row=schedule[key]||{enabled:false,hour:7,minute:0};return `<div class="day"><div>${label}</div><label><input id="enabled-${key}" type="checkbox" ${row.enabled?'checked':''}> actief</label><input id="time-${key}" type="time" value="${z(row.hour)}:${z(row.minute)}"><select id="anim-${key}" title="Animatie">${animationOptionsHtml}</select></div>`}).join('')
-  days.forEach(([key])=>{
+  root.innerHTML=days.map((key)=>{const row=schedule[key]||{enabled:false,hour:7,minute:0};return `<div class="day"><div>${dayLabel(key)}</div><label><input id="enabled-${key}" type="checkbox" ${row.enabled?'checked':''}> actief</label><input id="time-${key}" type="time" value="${z(row.hour)}:${z(row.minute)}"><select id="anim-${key}" title="Animatie">${animationOptionsHtml}</select></div>`}).join('')
+  days.forEach((key)=>{
     bindEditor(`enabled-${key}`);bindEditor(`time-${key}`);bindEditor(`anim-${key}`)
     const animSelect=document.getElementById(`anim-${key}`)
     animSelect.value=animationValueFromState(alarmCombo?.[key]||'1',alarmGifCombo?.[key]||'')
@@ -400,8 +745,18 @@ async function refresh(){
   try{
     const res=await fetch('/api/time')
     const data=await res.json()
+    applyLanguage(data.ui_language||currentLanguage)
     document.getElementById('currentTime').textContent=`${z(data.hour)}:${z(data.minute)}:${z(data.second)}`
     document.getElementById('currentDate').textContent=`${data.weekday_name} ${z(data.day)}-${z(data.month)}-${data.year} (${data.timezone_label})`
+    const bootMode=(data.boot_mode||'primary').toUpperCase()
+    const bootEl=document.getElementById('bootModeLine')
+    if(bootEl)bootEl.textContent=`BOOT MODE: ${bootMode}`
+    const setupState=document.getElementById('wifiSetupState')
+    if(setupState){
+      setupState.textContent=data.setup_mode
+        ? tr('setupActive',{ssid:data.setup_ap_ssid||'AlarmKlok-Setup',ip:data.setup_ip||'192.168.4.1'})
+        : tr('activeProfile',{ssid:data.wifi_ssid||tr('unknown')})
+    }
     if(data.alarm_gifs)availableGifs=data.alarm_gifs
     if(data.gif_tone_map)gifToneMap=data.gif_tone_map
     if(data.gif_led_map)gifLedMap=data.gif_led_map
@@ -431,16 +786,21 @@ async function refresh(){
     if(!isEditing()){
       document.getElementById('timeInput').value=`${z(data.hour)}:${z(data.minute)}`
       document.getElementById('secInput').value=data.second
-      document.getElementById('timezoneInput').value=data.timezone_name||'Europe/Amsterdam'
+      populateTimezones(data.timezone_name||'Europe/Amsterdam')
+      document.getElementById('languageInput').value=data.ui_language||'nl'
       updateToneScheme()
       document.getElementById('volumeInput').value=data.alarm_volume??70
+      document.getElementById('weatherUpdatesInput').value=data.weather_updates_per_day??4
+      document.getElementById('wifiKeepAliveInput').value=data.wifi_keep_alive?'1':'0'
+      document.getElementById('wifiSsidInput').value=data.wifi_ssid||''
+      document.getElementById('wifiPasswordInput').value=''
       document.getElementById('weatherPlaceInput').value=data.weather_place||''
-      document.getElementById('weatherPlaceInfo').textContent=`${data.weather_place||'onbekend'} (${data.weather_latitude}, ${data.weather_longitude})`
+      document.getElementById('weatherPlaceInfo').textContent=`${data.weather_place||tr('unknown')} (${data.weather_latitude}, ${data.weather_longitude})`
       renderSchedule(data.alarm_schedule||{},data.alarm_tones||[],data.alarm_combo||{},data.alarm_gif_combo||{})
     }
-    setStatus('Verbonden en bijgewerkt',false)
+    setStatus(tr('connected'),false)
   }catch(err){
-    setStatus('Fout bij ophalen status',true)
+    setStatus(tr('fetchError'),true)
     const msg=(err&&err.message)?err.message:String(err)
     setGifDebug('Refresh fout: '+msg,true)
   }
@@ -451,7 +811,7 @@ async function setTimeValue(){
   const parts=document.getElementById('timeInput').value.split(':').map(Number)
   const second=Number(document.getElementById('secInput').value||0)
   const out=await apiPost('/api/set-time',{hour:parts[0],minute:parts[1],second})
-  setStatus(out.ok?'Tijd opgeslagen':'Tijd opslaan mislukt',!out.ok)
+  setStatus(out.ok?tr('timeSaved'):tr('timeSaveFail'),!out.ok)
   editingUntil=0
   refresh()
 }
@@ -459,14 +819,26 @@ async function setTimeValue(){
 async function saveTimezone(){
   markEditing()
   const out=await apiPost('/api/set-timezone',{timezone:document.getElementById('timezoneInput').value})
-  setStatus(out.ok?'Tijdzone opgeslagen':'Tijdzone opslaan mislukt',!out.ok)
+  setStatus(out.ok?tr('tzSaved'):tr('tzSaveFail'),!out.ok)
   editingUntil=0
   refresh()
 }
 
 async function syncNtp(){
   const out=await apiPost('/api/sync-ntp',{})
-  setStatus(out.ok?'NTP sync gelukt':'NTP sync mislukt',!out.ok)
+  setStatus(out.ok?tr('ntpOk'):tr('ntpFail'),!out.ok)
+  refresh()
+}
+
+async function saveLanguage(){
+  markEditing()
+  const lang=document.getElementById('languageInput').value
+  const out=await apiPost('/api/set-language',{language:lang})
+  if(out.ok){
+    applyLanguage(out.ui_language||lang)
+  }
+  setStatus(out.ok?tr('languageSaved'):tr('languageSaveFail'),!out.ok)
+  editingUntil=0
   refresh()
 }
 
@@ -477,7 +849,7 @@ async function saveAlarmSettings(){
   let tone=choice.tone;
   if(!tone&&choice.gif&&gifToneMap[choice.gif])tone=gifToneMap[choice.gif];
   const out=await apiPost('/api/set-alarm-settings',{tone:tone||'1',volume:Number(document.getElementById('volumeInput').value||70)})
-  setStatus(out.ok?'Instellingen opgeslagen':'Instellingen opslaan mislukt',!out.ok)
+  setStatus(out.ok?tr('settingsSaved'):tr('settingsSaveFail'),!out.ok)
   editingUntil=0
   refresh()
 }
@@ -490,13 +862,37 @@ async function saveWeatherLocation(){
   const out=await apiPost('/api/set-weather-location',{place})
   if(out.ok){
     info.textContent=`${out.place} (${out.latitude}, ${out.longitude})`
-    setStatus('Weerlocatie opgeslagen',false)
+    setStatus(tr('weatherSaved'),false)
   } else {
-    info.textContent='Niet gevonden'
-    setStatus(out.error||'Weerlocatie opslaan mislukt',true)
+    info.textContent=tr('weatherNotFound')
+    setStatus(out.error||tr('weatherSaveFail'),true)
   }
   editingUntil=0
   refresh()
+}
+
+async function saveNetworkSettings(){
+  markEditing()
+  const out=await apiPost('/api/set-network-settings',{
+    weather_updates_per_day:Number(document.getElementById('weatherUpdatesInput').value||4),
+    wifi_keep_alive:document.getElementById('wifiKeepAliveInput').value==='1'
+  })
+  setStatus(out.ok?tr('networkSaved'):tr('networkSaveFail'),!out.ok)
+  editingUntil=0
+  refresh()
+}
+
+async function saveWiFiCredentials(){
+  markEditing()
+  const ssid=document.getElementById('wifiSsidInput').value.trim()
+  const password=document.getElementById('wifiPasswordInput').value
+  const out=await apiPost('/api/set-wifi-credentials',{ssid,password})
+  if(out.ok){
+    setStatus(tr('wifiSaved',{ssid:out.ssid}),false)
+  } else {
+    setStatus(out.error||tr('wifiSaveFail'),true)
+  }
+  editingUntil=0
 }
 
 async function testAlarm(){
@@ -517,7 +913,7 @@ async function saveSchedule(){
   const schedule={}
   const alarmCombo={}
   const alarmGifCombo={}
-  days.forEach(([key])=>{const parts=document.getElementById(`time-${key}`).value.split(':').map(Number);const animSelect=document.getElementById(`anim-${key}`);const choice=parseAnimationValue(animSelect.value);schedule[key]={enabled:document.getElementById(`enabled-${key}`).checked,hour:parts[0],minute:parts[1]};alarmGifCombo[key]=choice.gif;if(choice.tone){alarmCombo[key]=choice.tone}else if(choice.gif&&gifToneMap[choice.gif]){alarmCombo[key]=gifToneMap[choice.gif]}else{alarmCombo[key]=animSelect.dataset.lastTone||'1'}})
+  days.forEach((key)=>{const parts=document.getElementById(`time-${key}`).value.split(':').map(Number);const animSelect=document.getElementById(`anim-${key}`);const choice=parseAnimationValue(animSelect.value);schedule[key]={enabled:document.getElementById(`enabled-${key}`).checked,hour:parts[0],minute:parts[1]};alarmGifCombo[key]=choice.gif;if(choice.tone){alarmCombo[key]=choice.tone}else if(choice.gif&&gifToneMap[choice.gif]){alarmCombo[key]=gifToneMap[choice.gif]}else{alarmCombo[key]=animSelect.dataset.lastTone||'1'}})
   const out=await apiPost('/api/set-alarm-schedule',{alarm_schedule:schedule,alarm_combo:alarmCombo,alarm_gif_combo:alarmGifCombo})
   setStatus(out.ok?'Weekschema opgeslagen':'Weekschema opslaan mislukt',!out.ok)
   editingUntil=0
@@ -661,9 +1057,8 @@ async function previewGif(name){
   let ledTone=ledSel&&ledSel.value?String(ledSel.value):(gifLedMap[name]||tone)
   if(!tone)tone='1'
   if(!ledTone)ledTone=tone
-  const seconds=Number(document.getElementById('testSecondsInput')?.value||10)
   const out=await apiPost('/api/test-alarm',{
-    seconds,
+    seconds:0,
     tone:String(tone),
     led_tone:String(ledTone),
     animation:'gif:'+name
@@ -783,8 +1178,10 @@ async function saveTrackLabel(track){
   }
 }
 
-['timeInput','secInput','timezoneInput','testAnimationInput','volumeInput','testSecondsInput','weatherPlaceInput'].forEach(bindEditor)
+['timeInput','secInput','timezoneInput','languageInput','testAnimationInput','volumeInput','testSecondsInput','weatherPlaceInput','weatherUpdatesInput','wifiKeepAliveInput','wifiSsidInput','wifiPasswordInput'].forEach(bindEditor)
 document.getElementById('testAnimationInput').addEventListener('change',updateToneScheme)
+populateTimezones('Europe/Amsterdam')
+applyLanguage('nl')
 refresh()
 refreshGifManagerOnly()
 detectTracks()
