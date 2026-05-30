@@ -135,7 +135,7 @@ UP_BUTTON_PIN = 12    # Touch12 / ADC2_1 — omgewisseld op verzoek
 DOWN_BUTTON_PIN = 13  # Touch13 / ADC2_2 — omgewisseld op verzoek
 SET_BUTTON_PIN = 14   # Touch14 / ADC2_3 — vrij
 DAY_KEYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
-APP_VERSION = "6.0.2"
+APP_VERSION = "6.0.3"
 DEFAULT_UPDATE_MANIFEST_URL = "https://sjorsansems.github.io/retro-alarm-clock/updates/stable/manifest.json"
 ANIMATIONS_DIR = "animations"
 RETRO_FACT_SOURCE_URL = "https://api.wikimedia.org/feed/v1/wikipedia/en/onthisday/events/{month:02d}/{day:02d}"
@@ -722,6 +722,7 @@ class App:
         self._retro_fact_pending = False
         self._retro_fact_text = ""
         self._retro_fact_source = ""
+        self._set_feedback_start_ms = 0
         self._retro_fact_until = 0
         self._easter_active_until = None
         self._easter_message = ""
@@ -1572,6 +1573,20 @@ class App:
             lines = [""]
         return lines[:limit]
 
+    def _draw_feedback_text(self, text, y, now_ms):
+        value = str(text or "")
+        if not value:
+            return
+        text_width = len(value) * 8
+        if text_width <= 128:
+            x = max(0, (128 - text_width) // 2)
+            self.display.text(value, x, y, 1)
+            return
+
+        # Voor losse lange regels: geen horizontale marquee meer, maar eerst netjes wrappen.
+        wrapped = self._wrap_feedback_lines(value, max_chars=16, limit=4)
+        self.display.text(wrapped[0], max(0, (128 - len(wrapped[0]) * 8) // 2), y, 1)
+
     def _normalize_retro_fact_text(self, text):
         fact = str(text or "").strip()
         fact = fact.replace("\u2019", "'")
@@ -1637,8 +1652,19 @@ class App:
         self._retro_fact_pending = False
         self._set_feedback_lines = ["RETRO FACT", "---"] + self._wrap_feedback_lines(fact, max_chars=18, limit=3)
         self._set_feedback_text = fact
+        self._set_feedback_start_ms = time.ticks_ms()
         self._set_feedback_until = time.ticks_add(time.ticks_ms(), 10000)
         print("Retro fact:", fact)
+
+    def _get_retro_fact_preview(self):
+        fact, source = self._fetch_retro_game_fact()
+        return {
+            "ok": True,
+            "fact": fact,
+            "source": source,
+            "mode": "manual",
+            "status": "ok",
+        }
 
     def _stop_alarm(self, show_retro_fact=False):
         self.alarm_until = None
@@ -1667,6 +1693,7 @@ class App:
             self._retro_fact_pending = True
             self._set_feedback_lines = ["RETRO FACT", "laden..."]
             self._set_feedback_text = "RETRO FACT laden..."
+            self._set_feedback_start_ms = time.ticks_ms()
             self._set_feedback_until = time.ticks_add(time.ticks_ms(), 10000)
         # Sluit eventueel open GIF-bestand
         if self._gif_file is not None:
@@ -1717,7 +1744,8 @@ class App:
 
     def _set_feedback(self, text, ms=2200):
         self._set_feedback_text = str(text or "")
-        self._set_feedback_until = time.ticks_add(time.ticks_ms(), int(ms))
+        self._set_feedback_start_ms = time.ticks_ms()
+        self._set_feedback_until = time.ticks_add(self._set_feedback_start_ms, int(ms))
 
     def _next_alarm_entry(self, include_disabled=False):
         t = self.clock.read_time()
@@ -3338,15 +3366,22 @@ class App:
             self.display.fill(0)
             lines = self._set_feedback_lines if self._set_feedback_lines else [self._set_feedback_text]
             y_positions = [2, 14, 26, 36, 48, 56]
-            line_idx = 0
+            delay_ms = 1200
+            step_ms = 900
+            max_start = max(0, len(lines) - len(y_positions))
+            elapsed = time.ticks_diff(now_ms, self._set_feedback_start_ms)
+            start_idx = 0
+            if elapsed >= delay_ms and max_start > 0:
+                start_idx = min(max_start, (elapsed - delay_ms) // step_ms)
+
+            line_idx = start_idx
             y_idx = 0
             while line_idx < len(lines) and y_idx < len(y_positions):
                 ln = lines[line_idx]
                 if ln == "---":
                     self.display.hline(4, y_positions[y_idx] + 3, 120, 1)
                 elif ln:
-                    x = max(0, (128 - len(ln) * 8) // 2)
-                    self.display.text(ln, x, y_positions[y_idx], 1)
+                    self._draw_feedback_text(ln, y_positions[y_idx], now_ms)
                 y_idx += 1
                 line_idx += 1
         elif self._set_feedback_until:
@@ -5069,6 +5104,13 @@ class App:
             self.alarm_started_ms = None
             self.alarm_until = None
             c.send(self._json({"ok": True}))
+            return
+        if method == "POST" and path == "/api/test-retro-fact":
+            try:
+                payload = self._get_retro_fact_preview()
+                c.send(self._json(payload))
+            except Exception as e:
+                c.send(self._json({"ok": False, "error": str(e)}))
             return
         if method == "POST" and path == "/api/set-track-label":
             d = self._parse(req)

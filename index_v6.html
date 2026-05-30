@@ -324,6 +324,19 @@ code{background:#15112a;border:1px solid #4d4175;padding:1px 5px;border-radius:0
     </div>
     <div id="updateStatusLine" class="tiny" style="margin-top:8px">Update status: -</div>
   </div>
+
+  <div class="card">
+    <h3>&#127918; Retro Fact Test</h3>
+    <p style="font-size:13px;color:var(--muted);margin:0 0 10px">
+      Test de online koppeling voor de retro-fact zonder het alarm af te laten gaan.
+    </p>
+    <div class="row">
+      <button class="alt" onclick="testRetroFactNow()">Test retro fact</button>
+      <button class="ghost" onclick="refresh()">Status verversen</button>
+    </div>
+    <div id="retroFactStatusLine" class="tiny" style="margin-top:8px">Retro fact status: -</div>
+    <div id="retroFactPreview" class="status" style="margin-top:10px;white-space:pre-wrap;min-height:52px">Nog geen fact getest</div>
+  </div>
 </div>
 
 <script>
@@ -965,6 +978,21 @@ async function installUpdateNow(){
     setStatus(out.error||'Update installeren mislukt',true)
   }
   refresh()
+}
+
+async function testRetroFactNow(){
+  const status=document.getElementById('retroFactStatusLine')
+  const preview=document.getElementById('retroFactPreview')
+  if(status)status.textContent='Retro fact status: testen...'
+  if(preview)preview.textContent='Fact ophalen...'
+  const out=await apiPost('/api/test-retro-fact',{})
+  if(out.ok){
+    if(status)status.textContent='Retro fact status: OK | bron: '+(out.source||'-')
+    if(preview)preview.textContent=out.fact||'-'
+  }else{
+    if(status)status.textContent='Retro fact status: error | '+(out.error||'onbekend')
+    if(preview)preview.textContent='Geen fact opgehaald.'
+  }
 }
 
 async function saveWiFiCredentials(){
