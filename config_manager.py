@@ -225,6 +225,11 @@ class ConfigManager:
                 "longitude": 6.08,
                 "interval_s": 21600,
                 "updates_per_day": 4
+            },
+            "update": {
+                "auto_update_enabled": False,
+                "manifest_url": "https://sjorsansems.github.io/retro-alarm-clock/updates/stable/manifest.json",
+                "check_interval_hours": 24
             }
         }
 

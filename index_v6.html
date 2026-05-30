@@ -291,6 +291,39 @@ code{background:#15112a;border:1px solid #4d4175;padding:1px 5px;border-radius:0
     </div>
     <div id="otaStatus" style="font-size:13px;color:var(--muted)"></div>
   </div>
+
+  <div class="card">
+    <h3>&#128260; GitHub Auto-Update</h3>
+    <p style="font-size:13px;color:var(--muted);margin:0 0 10px">
+      Controleer updates via GitHub Pages manifest en installeer ze draadloos.
+    </p>
+    <div class="grid">
+      <div>
+        <label for="updateAutoInput">Automatisch updaten</label>
+        <select id="updateAutoInput">
+          <option value="0">Nee (alleen handmatig)</option>
+          <option value="1">Ja (automatische checks)</option>
+        </select>
+      </div>
+      <div>
+        <label for="updateIntervalInput">Check interval (uren)</label>
+        <input id="updateIntervalInput" type="number" min="1" max="168" value="24">
+      </div>
+    </div>
+    <div style="margin-top:10px">
+      <label for="updateManifestInput">Manifest URL</label>
+      <input id="updateManifestInput" type="text" placeholder="https://.../updates/stable/manifest.json">
+    </div>
+    <div class="row" style="margin-top:10px">
+      <button onclick="saveUpdateSettings()">Update instellingen opslaan</button>
+      <button class="ghost" onclick="checkUpdatesNow()">Check nu</button>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <button class="alt" onclick="installUpdateNow()">Installeer update</button>
+      <button class="ghost" onclick="refresh()">Status verversen</button>
+    </div>
+    <div id="updateStatusLine" class="tiny" style="margin-top:8px">Update status: -</div>
+  </div>
 </div>
 
 <script>
@@ -456,6 +489,18 @@ function renderStorage(st){
   bar.style.width=`${pct}%`
   line.textContent=`Gebruikt ${fmtBytes(used)} / ${fmtBytes(total)} (${pct}%) - Vrij ${fmtBytes(free)}`
   lim.textContent=`Veilige upload limiet nu: ${fmtBytes(st?.upload_max_bytes||0)} (reserve ${fmtBytes(st?.reserve_bytes||0)})`
+}
+
+function renderUpdateStatus(data){
+  const line=document.getElementById('updateStatusLine')
+  if(!line)return
+  const current=data?.app_version||'unknown'
+  const latest=data?.update_latest_version||current
+  const pending=!!data?.update_pending
+  const mode=data?.update_auto_enabled?'auto':'manual'
+  const state=data?.update_last_status||'idle'
+  const err=data?.update_last_error||''
+  line.textContent=`Versie ${current} | Latest ${latest} | Pending: ${pending?'ja':'nee'} | Mode: ${mode} | Status: ${state}${err?` | Fout: ${err}`:''}`
 }
 
 function z(n){return String(n).padStart(2,'0')}
@@ -762,6 +807,7 @@ async function refresh(){
     if(data.gif_led_map)gifLedMap=data.gif_led_map
     if(data.track_labels)trackLabels=data.track_labels
     if(data.storage)renderStorage(data.storage)
+    renderUpdateStatus(data)
     renderTestAnimations(data.alarm_tones||[])
     if(data.alarm_tones)cachedAlarmTones=data.alarm_tones
     
@@ -796,6 +842,9 @@ async function refresh(){
       document.getElementById('wifiPasswordInput').value=''
       document.getElementById('weatherPlaceInput').value=data.weather_place||''
       document.getElementById('weatherPlaceInfo').textContent=`${data.weather_place||tr('unknown')} (${data.weather_latitude}, ${data.weather_longitude})`
+      document.getElementById('updateAutoInput').value=data.update_auto_enabled?'1':'0'
+      document.getElementById('updateIntervalInput').value=data.update_check_interval_hours??24
+      document.getElementById('updateManifestInput').value=data.update_manifest_url||''
       renderSchedule(data.alarm_schedule||{},data.alarm_tones||[],data.alarm_combo||{},data.alarm_gif_combo||{})
     }
     setStatus(tr('connected'),false)
@@ -879,6 +928,42 @@ async function saveNetworkSettings(){
   })
   setStatus(out.ok?tr('networkSaved'):tr('networkSaveFail'),!out.ok)
   editingUntil=0
+  refresh()
+}
+
+async function saveUpdateSettings(){
+  markEditing()
+  const out=await apiPost('/api/set-update-settings',{
+    auto_update_enabled:document.getElementById('updateAutoInput').value==='1',
+    check_interval_hours:Number(document.getElementById('updateIntervalInput').value||24),
+    manifest_url:document.getElementById('updateManifestInput').value.trim()
+  })
+  setStatus(out.ok?'Update-instellingen opgeslagen':'Update-instellingen opslaan mislukt',!out.ok)
+  editingUntil=0
+  refresh()
+}
+
+async function checkUpdatesNow(){
+  const out=await apiPost('/api/check-updates',{})
+  if(out.ok){
+    const msg=out.update_pending?'Update beschikbaar':'Geen update beschikbaar'
+    setStatus(msg,false)
+  }else{
+    setStatus(out.error||'Update check mislukt',true)
+  }
+  refresh()
+}
+
+async function installUpdateNow(){
+  if(!confirm('Update downloaden en installeren? De klok herstart daarna.'))return
+  const out=await apiPost('/api/apply-update',{})
+  if(out.ok&&out.updated){
+    setStatus('Update geïnstalleerd, klok herstart...',false)
+  }else if(out.ok){
+    setStatus(out.message||'Geen update toegepast',false)
+  }else{
+    setStatus(out.error||'Update installeren mislukt',true)
+  }
   refresh()
 }
 
@@ -1178,7 +1263,7 @@ async function saveTrackLabel(track){
   }
 }
 
-['timeInput','secInput','timezoneInput','languageInput','testAnimationInput','volumeInput','testSecondsInput','weatherPlaceInput','weatherUpdatesInput','wifiKeepAliveInput','wifiSsidInput','wifiPasswordInput'].forEach(bindEditor)
+['timeInput','secInput','timezoneInput','languageInput','testAnimationInput','volumeInput','testSecondsInput','weatherPlaceInput','weatherUpdatesInput','wifiKeepAliveInput','wifiSsidInput','wifiPasswordInput','updateAutoInput','updateIntervalInput','updateManifestInput'].forEach(bindEditor)
 document.getElementById('testAnimationInput').addEventListener('change',updateToneScheme)
 populateTimezones('Europe/Amsterdam')
 applyLanguage('nl')

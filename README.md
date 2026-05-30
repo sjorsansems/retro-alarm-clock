@@ -173,6 +173,44 @@ You can configure:
 - Weather location and update behavior
 - WiFi behavior and setup credentials
 - OTA file uploads
+- GitHub Pages update checks and installs
+
+## Automatic Updates via GitHub Pages
+
+This project supports update checks against a GitHub Pages manifest:
+
+- Manifest location (default): `updates/stable/manifest.json`
+- Example URL: `https://sjorsansems.github.io/retro-alarm-clock/updates/stable/manifest.json`
+
+How it works:
+
+1. Clock checks the manifest URL.
+2. If `version` is newer than the running app version, update is marked as available.
+3. On install, files in manifest `files[]` are downloaded and swapped in place.
+4. Clock schedules an automatic reboot.
+
+Manifest format:
+
+```json
+{
+	"version": "6.1.0",
+	"channel": "stable",
+	"files": [
+		{
+			"path": "retro_georgy_alarm_klok_v6.py",
+			"url": "https://sjorsansems.github.io/retro-alarm-clock/updates/stable/retro_georgy_alarm_klok_v6.py",
+			"sha256": "optional-hex-sha256"
+		}
+	]
+}
+```
+
+Use the web UI card **GitHub Auto-Update** to:
+
+- Enable/disable automatic checks
+- Set check interval (hours)
+- Change manifest URL
+- Run manual check/install
 
 ## User Guide (Buttons)
 

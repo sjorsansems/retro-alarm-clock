@@ -13,6 +13,30 @@ import gc
 import esp32
 
 try:
+    import ussl as ssl
+except ImportError:
+    try:
+        import ssl
+    except ImportError:
+        ssl = None
+
+try:
+    import uhashlib as hashlib
+except ImportError:
+    try:
+        import hashlib
+    except ImportError:
+        hashlib = None
+
+try:
+    import ubinascii as binascii
+except ImportError:
+    try:
+        import binascii
+    except ImportError:
+        binascii = None
+
+try:
     from urllib.parse import quote
 except ImportError:
     quote = None
@@ -111,6 +135,8 @@ UP_BUTTON_PIN = 12    # Touch12 / ADC2_1 — omgewisseld op verzoek
 DOWN_BUTTON_PIN = 13  # Touch13 / ADC2_2 — omgewisseld op verzoek
 SET_BUTTON_PIN = 14   # Touch14 / ADC2_3 — vrij
 DAY_KEYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+APP_VERSION = "6.0.0"
+DEFAULT_UPDATE_MANIFEST_URL = "https://sjorsansems.github.io/retro-alarm-clock/updates/stable/manifest.json"
 
 # Aantal MP3-nummers op de SD-kaart (lied 1 t/m N)
 DFPLAYER_TRACK_COUNT = 30
@@ -574,6 +600,9 @@ class App:
         self.ui_language = "nl"
         self.wifi_keep_alive = False
         self.weather_updates_per_day = 4
+        self.auto_update_enabled = False
+        self.update_manifest_url = DEFAULT_UPDATE_MANIFEST_URL
+        self.update_check_interval_hours = 24
         self.setup_mode = False
         self.setup_reason = ""
         self.setup_ap_ssid = SETUP_AP_SSID
@@ -588,6 +617,11 @@ class App:
                 if interval_s > 0:
                     raw_updates = max(1, min(24, int(86400 // interval_s)))
             self.weather_updates_per_day = self._normalize_weather_updates_per_day(raw_updates)
+            self.auto_update_enabled = bool(self.config.get("update", "auto_update_enabled", False))
+            self.update_manifest_url = self._normalize_manifest_url(self.config.get("update", "manifest_url", DEFAULT_UPDATE_MANIFEST_URL))
+            self.update_check_interval_hours = self._normalize_update_check_interval_hours(
+                self.config.get("update", "check_interval_hours", 24)
+            )
 
         self.clock = ClockCore(timezone)
         self.alarm_until = None
@@ -669,6 +703,13 @@ class App:
         self._weather_temp = None      # buitentemperatuur °C (int)
         self._weather_next_ms = 0      # tijdstip eerste fetch (meteen bij opstart)
         self._weather_interval_ms = self._compute_weather_interval_ms(self.weather_updates_per_day)
+        self._update_next_check_ms = time.ticks_add(time.ticks_ms(), 90000)
+        self._update_last_check_ms = 0
+        self._update_last_error = ""
+        self._update_last_status = "idle"
+        self._update_latest_version = APP_VERSION
+        self._update_pending = False
+        self._update_manifest_cache = None
         self._easter_active_until = None
         self._easter_message = ""
         self._easter_key = None
@@ -830,6 +871,135 @@ class App:
     def _compute_weather_interval_ms(self, updates_per_day):
         updates = self._normalize_weather_updates_per_day(updates_per_day)
         return max(60 * 60 * 1000, (24 * 3600 * 1000) // updates)
+
+    def _normalize_update_check_interval_hours(self, value):
+        try:
+            n = int(value)
+        except Exception:
+            return 24
+        if n < 1:
+            return 1
+        if n > 168:
+            return 168
+        return n
+
+    def _normalize_manifest_url(self, value):
+        raw = str(value or "").strip()
+        if raw.startswith("http://") or raw.startswith("https://"):
+            return raw
+        return DEFAULT_UPDATE_MANIFEST_URL
+
+    def _version_tuple(self, value):
+        s = str(value or "0").strip().lower()
+        if s.startswith("v"):
+            s = s[1:]
+        out = []
+        for part in s.split("."):
+            try:
+                out.append(int(part))
+            except Exception:
+                out.append(0)
+        while len(out) < 3:
+            out.append(0)
+        return tuple(out[:3])
+
+    def _is_newer_version(self, latest, current):
+        return self._version_tuple(latest) > self._version_tuple(current)
+
+    def _safe_update_filename(self, value):
+        raw = str(value or "").strip()
+        if not raw or "/" in raw or "\\" in raw:
+            return ""
+        safe = "".join(ch for ch in raw if ("a" <= ch <= "z") or ("A" <= ch <= "Z") or ("0" <= ch <= "9") or ch in ("_", "-", "."))
+        return safe[:64]
+
+    def _parse_url(self, url):
+        txt = str(url or "").strip()
+        secure = False
+        if txt.startswith("https://"):
+            secure = True
+            rest = txt[8:]
+            default_port = 443
+        elif txt.startswith("http://"):
+            rest = txt[7:]
+            default_port = 80
+        else:
+            raise ValueError("URL moet met http:// of https:// beginnen")
+
+        slash = rest.find("/")
+        if slash >= 0:
+            hostport = rest[:slash]
+            path = rest[slash:]
+        else:
+            hostport = rest
+            path = "/"
+
+        if not hostport:
+            raise ValueError("URL host ontbreekt")
+
+        host = hostport
+        port = default_port
+        if ":" in hostport:
+            hp = hostport.rsplit(":", 1)
+            host = hp[0].strip()
+            try:
+                port = int(hp[1])
+            except Exception:
+                raise ValueError("Ongeldige URL poort")
+        if not host:
+            raise ValueError("Ongeldige URL host")
+        return secure, host, port, path
+
+    def _http_get_bytes(self, url, max_bytes=180000, timeout_s=12):
+        secure, host, port, path = self._parse_url(url)
+        s = socket.socket()
+        try:
+            s.settimeout(timeout_s)
+            addr = socket.getaddrinfo(host, port)[0][-1]
+            s.connect(addr)
+            if secure:
+                if ssl is None:
+                    raise ValueError("HTTPS niet ondersteund door deze firmware")
+                s = ssl.wrap_socket(s, server_hostname=host)
+
+            req = "GET {} HTTP/1.0\r\nHost: {}\r\nUser-Agent: AlarmKlok/{}\r\n\r\n".format(path, host, APP_VERSION)
+            s.send(req.encode())
+            resp = b""
+            while True:
+                chunk = s.recv(512)
+                if not chunk:
+                    break
+                resp += chunk
+                if len(resp) > max_bytes:
+                    raise ValueError("Download te groot")
+        finally:
+            try:
+                s.close()
+            except Exception:
+                pass
+
+        head_end = resp.find(b"\r\n\r\n")
+        if head_end < 0:
+            raise ValueError("Ongeldig HTTP antwoord")
+        header = resp[:head_end].decode("utf-8", "ignore")
+        if " 200 " not in header.split("\r\n", 1)[0]:
+            status = header.split("\r\n", 1)[0]
+            raise ValueError("HTTP fout: {}".format(status))
+        return resp[head_end + 4:]
+
+    def _sha256_hex(self, data):
+        if hashlib is None:
+            return None
+        try:
+            h = hashlib.sha256()
+            h.update(data)
+            digest = h.digest()
+            if binascii is not None:
+                return binascii.hexlify(digest).decode().lower()
+            # Fallback zonder binascii
+            return "".join("%02x" % b for b in digest)
+        except Exception:
+            return None
 
     def _next_wifi_auto_off_deadline(self):
         if self.wifi_keep_alive:
@@ -2674,6 +2844,179 @@ class App:
             self.wifi_disabled = True
             print("Weer ophalen klaar: WiFi weer uit")
 
+    def _set_update_status(self, status, err=""):
+        self._update_last_status = str(status or "idle")
+        self._update_last_error = str(err or "")
+        self._update_last_check_ms = time.ticks_ms()
+
+    def _read_update_manifest(self):
+        url = self._normalize_manifest_url(self.update_manifest_url)
+        body = self._http_get_bytes(url, max_bytes=64000, timeout_s=12)
+        try:
+            manifest = json.loads(body.decode("utf-8"))
+        except Exception as e:
+            raise ValueError("Manifest is geen geldige JSON: {}".format(e))
+        if not isinstance(manifest, dict):
+            raise ValueError("Manifest moet een object zijn")
+        version = str(manifest.get("version", "")).strip()
+        if not version:
+            raise ValueError("Manifest mist version")
+        files = manifest.get("files", [])
+        if not isinstance(files, list):
+            raise ValueError("Manifest files moet een lijst zijn")
+        return manifest
+
+    def _check_updates_once(self):
+        manifest = self._read_update_manifest()
+        latest = str(manifest.get("version", APP_VERSION)).strip()
+        self._update_manifest_cache = manifest
+        self._update_latest_version = latest
+        self._update_pending = self._is_newer_version(latest, APP_VERSION)
+        self._set_update_status("checked", "")
+        return {
+            "ok": True,
+            "current_version": APP_VERSION,
+            "latest_version": latest,
+            "update_pending": self._update_pending,
+            "manifest_url": self.update_manifest_url,
+        }
+
+    def _apply_manifest_update(self, manifest):
+        latest = str(manifest.get("version", "")).strip()
+        if not self._is_newer_version(latest, APP_VERSION):
+            self._update_latest_version = latest or APP_VERSION
+            self._update_pending = False
+            return {"ok": True, "updated": False, "message": "Geen nieuwere versie"}
+
+        files = manifest.get("files", [])
+        if not files:
+            raise ValueError("Manifest bevat geen bestanden")
+
+        staged = []
+        try:
+            for item in files:
+                if not isinstance(item, dict):
+                    raise ValueError("Ongeldige file entry in manifest")
+                target = self._safe_update_filename(item.get("path", ""))
+                if not target:
+                    raise ValueError("Ongeldig doelbestand in manifest")
+                url = str(item.get("url", "")).strip()
+                if not url:
+                    raise ValueError("Bestand URL ontbreekt voor {}".format(target))
+                blob = self._http_get_bytes(url, max_bytes=280000, timeout_s=18)
+                expected_hash = str(item.get("sha256", "") or "").strip().lower()
+                if expected_hash:
+                    got_hash = self._sha256_hex(blob)
+                    if not got_hash:
+                        raise ValueError("sha256 niet beschikbaar voor hash-check")
+                    if got_hash != expected_hash:
+                        raise ValueError("Hash mismatch voor {}".format(target))
+
+                tmp_name = target + ".new"
+                with open(tmp_name, "wb") as f:
+                    f.write(blob)
+                staged.append((target, tmp_name))
+
+            for target, tmp_name in staged:
+                bak_name = target + ".bak"
+                try:
+                    import uos
+                    try:
+                        uos.remove(bak_name)
+                    except Exception:
+                        pass
+                    try:
+                        uos.rename(target, bak_name)
+                    except Exception:
+                        pass
+                    uos.rename(tmp_name, target)
+                except Exception as e:
+                    raise ValueError("Wisselen bestand mislukt ({}): {}".format(target, e))
+
+            self._update_latest_version = latest
+            self._update_pending = False
+            self._set_update_status("updated", "")
+            self._schedule_restart(1500)
+            return {
+                "ok": True,
+                "updated": True,
+                "latest_version": latest,
+                "restart": True,
+                "files": [name for name, _tmp in staged],
+            }
+        except Exception:
+            # Probeer losse .new bestanden op te ruimen
+            try:
+                import uos
+                for _target, tmp_name in staged:
+                    try:
+                        uos.remove(tmp_name)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            raise
+
+    def _run_update_cycle(self, apply_update=False):
+        wifi_was_disabled = self.wifi_disabled
+        if wifi_was_disabled:
+            self.wifi_disabled = False
+            self._ensure_wifi_connected()
+        if not self.wifi_ok or not self.wifi or not self.wifi.is_connected():
+            self._set_update_status("error", "Geen WiFi verbinding")
+            if wifi_was_disabled:
+                self._disable_wifi()
+                self.wifi_disabled = True
+            return {"ok": False, "error": "Geen WiFi verbinding"}
+
+        try:
+            check = self._check_updates_once()
+            if not apply_update:
+                return check
+            if not check.get("update_pending"):
+                return {"ok": True, "updated": False, "message": "Geen update beschikbaar"}
+            manifest = self._update_manifest_cache or self._read_update_manifest()
+            return self._apply_manifest_update(manifest)
+        except Exception as e:
+            self._set_update_status("error", str(e))
+            return {"ok": False, "error": str(e)}
+        finally:
+            if wifi_was_disabled:
+                self._disable_wifi()
+                self.wifi_disabled = True
+
+    def _check_auto_update(self):
+        if not self.auto_update_enabled:
+            return
+        if self.setup_mode or self.alarm_until is not None or self.alarm_edit_mode:
+            return
+        now = time.ticks_ms()
+        if time.ticks_diff(now, self._update_next_check_ms) < 0:
+            return
+
+        self._update_next_check_ms = time.ticks_add(now, self.update_check_interval_hours * 3600 * 1000)
+        result = self._run_update_cycle(apply_update=True)
+        if result.get("ok") and result.get("updated"):
+            print("Auto-update toegepast:", result.get("latest_version", "?"))
+        elif result.get("ok"):
+            print("Auto-update check: geen update")
+        else:
+            print("Auto-update fout:", result.get("error", "onbekend"))
+
+    def _get_update_status_payload(self):
+        remaining_ms = max(0, time.ticks_diff(self._update_next_check_ms, time.ticks_ms()))
+        return {
+            "current_version": APP_VERSION,
+            "latest_version": self._update_latest_version,
+            "update_pending": self._update_pending,
+            "auto_update_enabled": self.auto_update_enabled,
+            "manifest_url": self.update_manifest_url,
+            "check_interval_hours": self.update_check_interval_hours,
+            "last_status": self._update_last_status,
+            "last_error": self._update_last_error,
+            "next_check_in_s": int(remaining_ms // 1000),
+        }
+
     def _draw_weather_overlay(self, t):
         now_ms = time.ticks_ms()
         # DS3231 temperatuur ophalen (elke 60s, gecached) als fallback
@@ -4301,7 +4644,15 @@ class App:
                 "weather_updates_per_day": self.weather_updates_per_day,
                 "weather_place": self.config.get("weather", "place", "Zevenaar") if self.config else "Zevenaar",
                 "weather_latitude": self.config.get("weather", "latitude", 51.92) if self.config else 51.92,
-                "weather_longitude": self.config.get("weather", "longitude", 6.08) if self.config else 6.08
+                "weather_longitude": self.config.get("weather", "longitude", 6.08) if self.config else 6.08,
+                "app_version": APP_VERSION,
+                "update_latest_version": self._update_latest_version,
+                "update_pending": self._update_pending,
+                "update_auto_enabled": self.auto_update_enabled,
+                "update_manifest_url": self.update_manifest_url,
+                "update_check_interval_hours": self.update_check_interval_hours,
+                "update_last_status": self._update_last_status,
+                "update_last_error": self._update_last_error
             }))
             return
         if method == "GET" and path == "/api/storage-info":
@@ -4390,6 +4741,35 @@ class App:
                 "wifi_keep_alive": self.wifi_keep_alive,
                 "weather_updates_per_day": self.weather_updates_per_day,
             }))
+            return
+        if method == "GET" and path == "/api/update-status":
+            c.send(self._json({"ok": True, "update": self._get_update_status_payload()}))
+            return
+        if method == "POST" and path == "/api/check-updates":
+            out = self._run_update_cycle(apply_update=False)
+            if out.get("ok"):
+                out["update"] = self._get_update_status_payload()
+            c.send(self._json(out))
+            return
+        if method == "POST" and path == "/api/apply-update":
+            out = self._run_update_cycle(apply_update=True)
+            if out.get("ok"):
+                out["update"] = self._get_update_status_payload()
+            c.send(self._json(out))
+            return
+        if method == "POST" and path == "/api/set-update-settings":
+            d = self._parse(req)
+            self.auto_update_enabled = bool(d.get("auto_update_enabled", self.auto_update_enabled))
+            self.update_manifest_url = self._normalize_manifest_url(d.get("manifest_url", self.update_manifest_url))
+            self.update_check_interval_hours = self._normalize_update_check_interval_hours(
+                d.get("check_interval_hours", self.update_check_interval_hours)
+            )
+            self._update_next_check_ms = time.ticks_add(time.ticks_ms(), 30000)
+            if self.config:
+                self.config.set("update", "auto_update_enabled", self.auto_update_enabled)
+                self.config.set("update", "manifest_url", self.update_manifest_url)
+                self.config.set("update", "check_interval_hours", self.update_check_interval_hours)
+            c.send(self._json({"ok": True, "update": self._get_update_status_payload()}))
             return
         if method == "POST" and path == "/api/set-wifi-credentials":
             d = self._parse(req)
@@ -4671,6 +5051,7 @@ class App:
                 self._handle_buttons()
                 self._handle_wifi_state()
                 self._check_weather_fetch()
+                self._check_auto_update()
 
                 if self.sock:
                     try:
