@@ -10,7 +10,8 @@
 
 		  8-BIT OLED ANIMATIONS  +  MP3 ALARM MUSIC  +  WS2812 LED THEMES
 ```
-<img width="3072" height="4096" alt="IMG_20260530_151650277" src="https://github.com/user-attachments/assets/028d6e9a-1a46-4c03-b423-da7320406590" />
+<img width="3072" height="1982" alt="1" src="https://github.com/user-attachments/assets/7c88ce23-f0db-41f5-86cd-3f9312c6023e" />
+
 
 An ESP32-S3 retro alarm clock project with:
 - SH1106 OLED 128x64 display and pixel animations
@@ -21,6 +22,7 @@ An ESP32-S3 retro alarm clock project with:
 - Setup AP fallback (`AlarmKlok-Setup`) when WiFi is not configured/reachable
 
 ## What We Built
+<img width="4096" height="3072" alt="2" src="https://github.com/user-attachments/assets/b57f14ae-bced-455c-aabc-8756802d4463" />
 
 This project is a complete standalone alarm device, not only a demo sketch.
 
