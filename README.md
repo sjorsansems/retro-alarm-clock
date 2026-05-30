@@ -129,6 +129,10 @@ Usage:
 3. Open `https://<your-user>.github.io/<your-repo>/web-installer/install.html`.
 4. Click **Install Alarm Clock Firmware** and select your board serial port.
 
+Live installer URL for this project:
+
+- https://sjorsansems.github.io/retro-alarm-clock/web-installer/install.html
+
 Important:
 
 - Web Serial only works on secure pages (`https://`) in compatible browsers (Chrome/Edge).

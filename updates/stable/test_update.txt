@@ -1,0 +1,2 @@
+Retro AlarmKlok update test v6.0.1
+If this file appears on the device after update, the GitHub Pages updater works.
