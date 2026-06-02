@@ -138,7 +138,7 @@ BUTTON_DEBOUNCE_MS = 60
 BUTTON_SHORT_MIN_MS = 70
 BUTTON_SHORT_MIN_MS_GAME = 45
 DAY_KEYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
-APP_VERSION = "6.1.9"
+APP_VERSION = "6.1.10"
 DEFAULT_UPDATE_MANIFEST_URL = "https://sjorsansems.github.io/retro-alarm-clock/updates/stable/manifest.json"
 ANIMATIONS_DIR = "animations"
 DEFAULT_RETRO_FACT_DISPLAY_SECONDS = 10
@@ -4079,6 +4079,17 @@ class App:
             if not check.get("update_pending"):
                 return {"ok": True, "updated": False, "message": "Geen update beschikbaar"}
             manifest = self._update_manifest_cache or self._read_update_manifest()
+            latest_v = str(manifest.get("version", "?")).strip()
+            try:
+                self.display.fill(0)
+                self.display.text("Update gevonden!", 0, 4, 1)
+                self.display.text("Van: v{}".format(APP_VERSION), 0, 20, 1)
+                self.display.text("Naar: v{}".format(latest_v), 0, 34, 1)
+                self.display.text("Start over 3s...", 0, 50, 1)
+                self.display.show()
+                import time as _t; _t.sleep(3)
+            except Exception:
+                pass
             return self._apply_manifest_update(manifest)
         except Exception as e:
             self._set_update_status("error", str(e))
