@@ -1,7 +1,7 @@
 {
-  "version": "6.1.8",
+  "version": "6.1.9",
   "channel": "stable",
-  "notes": "Button handling hardened against ghost presses from power-line interference while keeping fast game responsiveness",
+  "notes": "Alarm skip popup: betere teksten en geen overlap meer op OLED display",
   "files": [
     {
       "path": "retro_georgy_alarm_klok_v6.py",
