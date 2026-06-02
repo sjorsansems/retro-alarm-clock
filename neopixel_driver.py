@@ -453,9 +453,71 @@ class NeopixelDriver:
             else:
                 self.set_pixel(i, 230, 150, 40)
         self.show()
+
+    def theme_it_crowd(self, frame, intensity):
+        """IT Crowd Intro - CRT boot/glitch vibe in red, green and cyan."""
+        phase = frame % 48
+        for i in range(self.num_leds):
+            # Per-led phase offset gives a lively intro-style shimmer.
+            p = (phase + i * 5) % 48
+            if p < 8:
+                # Warm boot pulse
+                level = 90 + ((p * 18 + intensity) % 140)
+                self.set_pixel(i, min(255, level), max(0, level // 8), 0)
+            elif p < 20:
+                # Green terminal sweep
+                g = 80 + ((p * 9 + intensity + i * 7) % 175)
+                self.set_pixel(i, 0, min(255, g), 0)
+            elif p < 34:
+                # Cyan/blue wireframe look
+                c = 70 + ((p * 11 + i * 13 + intensity) % 170)
+                self.set_pixel(i, 0, min(255, c), min(255, c))
+            else:
+                # RGB glitch pops
+                s = (p * 17 + i * 29 + intensity) % 3
+                if s == 0:
+                    self.set_pixel(i, 255, 40, 20)
+                elif s == 1:
+                    self.set_pixel(i, 30, 255, 80)
+                else:
+                    self.set_pixel(i, 60, 150, 255)
+        self.show()
+
+    def theme_random_mix(self, frame, intensity):
+        """Random Mix - every few seconds pick a pseudo-random existing theme."""
+        theme_bank = [
+            self.theme_zelda,
+            self.theme_mario,
+            self.theme_synthwave,
+            self.theme_sonic,
+            self.theme_metroid,
+            self.theme_pokemon,
+            self.theme_tetris,
+            self.theme_moonstone,
+            self.theme_arcade,
+            self.theme_doom,
+            self.theme_knight_rider,
+            self.theme_fire,
+            self.theme_heartbeat,
+            self.theme_matrix,
+            self.theme_pacman,
+            self.theme_pong,
+            self.theme_radar,
+            self.theme_skull,
+            self.theme_snake,
+            self.theme_space,
+            self.theme_ufo,
+            self.theme_donkey,
+            self.theme_it_crowd,
+        ]
+        segment = 56
+        bucket = frame // segment
+        # Lightweight deterministic hash for pseudo-random pick (no extra imports).
+        idx = (((bucket * 1103515245) + 12345) >> 7) % len(theme_bank)
+        theme_bank[idx](frame, intensity)
     
     def get_theme_func(self, tone):
-        """Return theme function for given tone (1-9)."""
+        """Return theme function for given tone."""
         themes = {
             '1': self.theme_zelda,
             '2': self.theme_mario,
@@ -479,5 +541,7 @@ class NeopixelDriver:
             '20': self.theme_space,
             '21': self.theme_ufo,
             '22': self.theme_donkey,
+            '23': self.theme_random_mix,
+            '24': self.theme_it_crowd,
         }
         return themes.get(str(tone), self.theme_zelda)  # Default to Zelda

@@ -138,7 +138,7 @@ BUTTON_DEBOUNCE_MS = 60
 BUTTON_SHORT_MIN_MS = 70
 BUTTON_SHORT_MIN_MS_GAME = 45
 DAY_KEYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
-APP_VERSION = "6.1.10"
+APP_VERSION = "6.1.11"
 DEFAULT_UPDATE_MANIFEST_URL = "https://sjorsansems.github.io/retro-alarm-clock/updates/stable/manifest.json"
 ANIMATIONS_DIR = "animations"
 DEFAULT_RETRO_FACT_DISPLAY_SECONDS = 10
@@ -345,7 +345,7 @@ SPACE_BIRD_SPRITES = {
 
 # Aantal MP3-nummers op de SD-kaart (lied 1 t/m N)
 DFPLAYER_TRACK_COUNT = 30
-SCHEDULE_NAMED_TONE_MAX = 22
+SCHEDULE_NAMED_TONE_MAX = 24
 ALARM_REPEAT_MS = 45000  # herstart track pas na ruime speeltijd (voorkomt vroeg afkappen)
 
 # Koppel GIF-namen aan een alarm-tone (muziek + LEDs).
@@ -365,7 +365,8 @@ def get_alarm_tone_options():
         5: "Metroid", 6: "Pokemon", 7: "Tetris", 8: "Moonstone", 9: "Arcade",
         10: "DOOM", 11: "Knight Rider", 12: "Fire", 13: "Heartbeat",
         14: "Matrix", 15: "Pac-Man", 16: "Pong", 17: "Radar",
-        18: "Skull", 19: "Snake", 20: "Space", 21: "UFO", 22: "Donkey"
+        18: "Skull", 19: "Snake", 20: "Space", 21: "UFO", 22: "Donkey",
+        23: "Random Mix", 24: "IT Crowd Intro"
     }
     schemes = {
         1: "Groen -> goud pulse",
@@ -390,6 +391,8 @@ def get_alarm_tone_options():
         20: "Space twinkle stars",
         21: "UFO beam + hull pulse",
         22: "Retro amber/brown arcade",
+        23: "Pseudo-random mix van alle LED themes",
+        24: "CRT/glitch intro (IT Crowd vibe)",
     }
     return [
         {

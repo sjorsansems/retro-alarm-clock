@@ -1,7 +1,7 @@
 {
-  "version": "6.1.10",
+  "version": "6.1.11",
   "channel": "stable",
-  "notes": "Toon update gevonden en installing update scherm op OLED tijdens OTA",
+  "notes": "Nieuwe LED modes: Random Mix en IT Crowd Intro",
   "files": [
     {
       "path": "retro_georgy_alarm_klok_v6.py",
