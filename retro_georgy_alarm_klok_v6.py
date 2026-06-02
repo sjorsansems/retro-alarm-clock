@@ -3984,6 +3984,17 @@ class App:
         if not files:
             raise ValueError("Manifest bevat geen bestanden")
 
+        # Toon installatie-melding op OLED
+        try:
+            self.display.fill(0)
+            self.display.text("Installing update", 0, 4, 1)
+            self.display.text("Van: v{}".format(APP_VERSION), 0, 20, 1)
+            self.display.text("Naar: v{}".format(latest), 0, 34, 1)
+            self.display.text("Even geduld...", 0, 50, 1)
+            self.display.show()
+        except Exception:
+            pass
+
         staged = []
         try:
             for item in files:
