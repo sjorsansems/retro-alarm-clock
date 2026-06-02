@@ -2762,6 +2762,7 @@ class App:
         nxt_after = self._next_alarm_entry(include_disabled=False, skip_once_aware=True)
         lines = [
             "Aanstaand alarm",
+            "'eenmalig'",
             "overslaan:",
             "{} {:02d}:{:02d}".format(day_txt, hh, mm),
         ]
