@@ -2749,10 +2749,11 @@ class App:
         if self._skip_once_alarm == target_key:
             self._skip_once_alarm = None
             self._set_feedback_lines = [
-                "1x overslaan uit:",
-                "{} {:02d}:{:02d}".format(day_map.get(key, nxt["day"]), hh, mm),
+                "Alarm eenmalig",
+                "overslaan",
+                "geannuleerd",
             ]
-            self._set_feedback("", ms=2500)
+            self._set_feedback("", ms=2800)
             print("1x overslaan geannuleerd {} {:02d}:{:02d}".format(day_map.get(key, nxt["day"]), hh, mm))
             return
 
@@ -2760,18 +2761,17 @@ class App:
         day_txt = day_map.get(key, nxt["day"])
         nxt_after = self._next_alarm_entry(include_disabled=False, skip_once_aware=True)
         lines = [
-            "Alarm 1x overgeslagen:",
+            "Aanstaand alarm",
+            "overslaan:",
             "{} {:02d}:{:02d}".format(day_txt, hh, mm),
-            "---",
         ]
         if nxt_after:
             nxt_day = day_map.get(nxt_after["key"], nxt_after["day"])
             lines += [
+                "---",
                 "Volgend alarm:",
                 "{} {:02d}:{:02d}".format(nxt_day, nxt_after["hour"], nxt_after["minute"]),
             ]
-        else:
-            lines += ["Geen volgend", "alarm actief"]
         self._set_feedback_lines = lines
         self._set_feedback("", ms=3500)
         print("Alarm 1x overgeslagen {} {:02d}:{:02d}".format(day_txt, hh, mm))
@@ -4306,8 +4306,6 @@ class App:
                     self.display.text(alarm_text, 10, 44, 1)
                 else:
                     self.display.text("--:--", 10, 44, 1)
-                if self._skip_once_alarm is not None:
-                    self.display.text("SKIP1X", 80, 44, 1)
             # Day + date lines
             self.display.text(self._weekday_short(t[6]), 0, 56, 1)
             self.display.text("{:02d}-{:02d}".format(t[2], t[1]), 24, 56, 1)
@@ -4371,8 +4369,6 @@ class App:
                 self.display.text("{} {:02d}:{:02d}".format(day_str, ah, am), 10, 44, 1)
             else:
                 self.display.text("--:--", 10, 44, 1)
-            if self._skip_once_alarm is not None:
-                self.display.text("SKIP1X", 80, 44, 1)
             self.display.text(self._weekday_short(t[6]), 0, 56, 1)
             self.display.text("{:02d}-{:02d}".format(t[2], t[1]), 24, 56, 1)
             self._draw_weather_overlay(t)
