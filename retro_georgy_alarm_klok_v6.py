@@ -134,8 +134,11 @@ NIGHT_DIM_END_HOUR = 7
 UP_BUTTON_PIN = 12    # Touch12 / ADC2_1 — omgewisseld op verzoek
 DOWN_BUTTON_PIN = 13  # Touch13 / ADC2_2 — omgewisseld op verzoek
 SET_BUTTON_PIN = 14   # Touch14 / ADC2_3 — vrij
+BUTTON_DEBOUNCE_MS = 60
+BUTTON_SHORT_MIN_MS = 70
+BUTTON_SHORT_MIN_MS_GAME = 45
 DAY_KEYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
-APP_VERSION = "6.1.7"
+APP_VERSION = "6.1.8"
 DEFAULT_UPDATE_MANIFEST_URL = "https://sjorsansems.github.io/retro-alarm-clock/updates/stable/manifest.json"
 ANIMATIONS_DIR = "animations"
 DEFAULT_RETRO_FACT_DISPLAY_SECONDS = 10
@@ -1074,7 +1077,7 @@ class App:
             s = _bs[name]
             def handler(p):
                 now = time.ticks_ms()
-                if time.ticks_diff(now, s["last_edge"]) < 40:
+                if time.ticks_diff(now, s["last_edge"]) < BUTTON_DEBOUNCE_MS:
                     return
                 s["last_edge"] = now
                 if p.value() == 0:  # falling edge = ingedrukt
@@ -1088,15 +1091,18 @@ class App:
                         s["pending"] = None
                         s["fired_long"] = True
                 else:  # rising edge = losgelaten
+                    held_ms = time.ticks_diff(now, s["start"]) if s["start"] > 0 else 0
+                    min_short_ms = BUTTON_SHORT_MIN_MS_GAME if self._space_game_active else BUTTON_SHORT_MIN_MS
                     if has_long_cb and not s["fired_long"]:
-                        held_ms = time.ticks_diff(now, s["start"]) if s["start"] > 0 else 0
                         # Fallback: als de poll-loop de lange druk net miste,
                         # herken hem alsnog netjes bij loslaten.
                         if long_ms > 0 and held_ms >= long_ms:
                             s["pending"] = "long"
                             s["fired_long"] = True
-                        else:
+                        elif held_ms >= min_short_ms:
                             s["pending"] = "short"
+                    elif (not has_long_cb) and held_ms >= min_short_ms:
+                        s["pending"] = "short"
             return handler
         self.btn_up.irq(trigger=Pin.IRQ_FALLING | Pin.IRQ_RISING, handler=_make_irq("up", True, 3000))
         self.btn_down.irq(trigger=Pin.IRQ_FALLING | Pin.IRQ_RISING, handler=_make_irq("down", True, 3000))
@@ -2653,8 +2659,31 @@ class App:
         self._set_feedback_start_ms = time.ticks_ms()
         self._set_feedback_until = time.ticks_add(self._set_feedback_start_ms, int(ms))
 
-    def _next_alarm_entry(self, include_disabled=False):
-        t = self.clock.read_time()
+    def _alarm_target_key_from_entry(self, entry, now_t=None):
+        if not isinstance(entry, dict):
+            return None
+        key = entry.get("key")
+        if key not in DAY_KEYS:
+            return None
+        try:
+            hh = int(entry.get("hour", 0)) % 24
+            mm = int(entry.get("minute", 0)) % 60
+        except Exception:
+            return None
+        now = now_t if now_t is not None else self.clock.read_time()
+        y = int(now[0])
+        mo = int(now[1])
+        d = int(now[2])
+        days_ahead = (DAY_KEYS.index(key) - ((int(now[6]) - 1) % 7)) % 7
+        if days_ahead == 0 and (hh < int(now[3]) or (hh == int(now[3]) and mm <= int(now[4]))):
+            days_ahead = 7
+        target_day = d + days_ahead
+        target_ts = time.mktime((y, mo, target_day, hh, mm, 0, 0, 0))
+        target = time.localtime(target_ts)
+        return (int(target[0]), int(target[1]), int(target[2]), hh, mm)
+
+    def _next_alarm_entry(self, include_disabled=False, skip_once_aware=True, now_t=None):
+        t = now_t if now_t is not None else self.clock.read_time()
         day_abbr = ("ma", "di", "wo", "do", "vr", "za", "zo")
         day_keys = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
         cfg = self.alarm_schedule
@@ -2679,13 +2708,18 @@ class App:
                 continue
             if offset == 0 and (hh < cur_h or (hh == cur_h and mm <= cur_m)):
                 continue
-            return {
+            candidate = {
                 "key": key,
                 "day": day_abbr[di],
                 "hour": hh,
                 "minute": mm,
                 "enabled": enabled,
             }
+            if skip_once_aware:
+                target_key = self._alarm_target_key_from_entry(candidate, now_t=t)
+                if target_key is not None and target_key == self._skip_once_alarm:
+                    continue
+            return candidate
         return None
 
     def _set_toggle_next_alarm(self):
@@ -2695,7 +2729,7 @@ class App:
         }
         # Eén druk in normaal scherm: sla alleen het eerstvolgende alarm één keer over.
         # Tweede druk voor hetzelfde doel: annuleer die skip weer.
-        nxt = self._next_alarm_entry(include_disabled=False)
+        nxt = self._next_alarm_entry(include_disabled=False, skip_once_aware=False)
         if not nxt:
             self._set_feedback_lines = ["Geen actief", "alarm gevonden"]
             self._set_feedback("", ms=2500)
@@ -2705,50 +2739,42 @@ class App:
         key = nxt["key"]
         hh = int(nxt["hour"]) % 24
         mm = int(nxt["minute"]) % 60
-
-        # Bepaal de concrete kalenderdatum van 'nxt'.
-        now = self.clock.read_time()
-        y = int(now[0])
-        mo = int(now[1])
-        d = int(now[2])
-        days_ahead = (DAY_KEYS.index(key) - ((int(now[6]) - 1) % 7)) % 7
-        if days_ahead == 0 and (hh < int(now[3]) or (hh == int(now[3]) and mm <= int(now[4]))):
-            days_ahead = 7
-        target_day = d + days_ahead
-        # Datumberekening via mktime/localtime om maandgrenzen correct af te handelen.
-        target_ts = time.mktime((y, mo, target_day, hh, mm, 0, 0, 0))
-        target = time.localtime(target_ts)
-        target_key = (int(target[0]), int(target[1]), int(target[2]), hh, mm)
+        target_key = self._alarm_target_key_from_entry(nxt)
+        if target_key is None:
+            self._set_feedback_lines = ["Skip mislukt", "ongeldige alarmtijd"]
+            self._set_feedback("", ms=2500)
+            print("Skip mislukt: ongeldige alarmtijd")
+            return
 
         if self._skip_once_alarm == target_key:
             self._skip_once_alarm = None
             self._set_feedback_lines = [
-                "Skip geannuleerd:",
+                "1x overslaan uit:",
                 "{} {:02d}:{:02d}".format(day_map.get(key, nxt["day"]), hh, mm),
             ]
             self._set_feedback("", ms=2500)
-            print("Skip geannuleerd {} {:02d}:{:02d}".format(day_map.get(key, nxt["day"]), hh, mm))
+            print("1x overslaan geannuleerd {} {:02d}:{:02d}".format(day_map.get(key, nxt["day"]), hh, mm))
             return
 
         self._skip_once_alarm = target_key
         day_txt = day_map.get(key, nxt["day"])
-        nxt_after = self._next_alarm_entry(include_disabled=False)
+        nxt_after = self._next_alarm_entry(include_disabled=False, skip_once_aware=True)
         lines = [
-            "Alarm skip 1x:",
+            "Alarm 1x overgeslagen:",
             "{} {:02d}:{:02d}".format(day_txt, hh, mm),
             "---",
         ]
         if nxt_after:
             nxt_day = day_map.get(nxt_after["key"], nxt_after["day"])
             lines += [
-                "Eerst volgend:",
+                "Volgend alarm:",
                 "{} {:02d}:{:02d}".format(nxt_day, nxt_after["hour"], nxt_after["minute"]),
             ]
         else:
             lines += ["Geen volgend", "alarm actief"]
         self._set_feedback_lines = lines
         self._set_feedback("", ms=3500)
-        print("Alarm 1x skip {} {:02d}:{:02d}".format(day_txt, hh, mm))
+        print("Alarm 1x overgeslagen {} {:02d}:{:02d}".format(day_txt, hh, mm))
 
     def _toggle_today_alarm(self):
         day_key, row = self._current_day_alarm()
@@ -3193,36 +3219,13 @@ class App:
 
     def _next_alarm_info(self, t):
         # Returns (day_str, hh, mm) for next alarm, or None if none
-        # t[6] is weekday: 1=Mon ... 7=Sun, DAY_KEYS = ("mon","tue","wed","thu","fri","sat","sun")
-        day_abbr = ("ma", "di", "wo", "do", "vr", "za", "zo")
-        day_keys = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
-        cfg = self.alarm_schedule
-        if not isinstance(cfg, dict):
+        nxt = self._next_alarm_entry(include_disabled=False, skip_once_aware=True, now_t=t)
+        if not nxt:
             return None
-        today_idx = (int(t[6]) - 1) % 7  # 0=Mon
-        cur_h = int(t[3])
-        cur_m = int(t[4])
-        for offset in range(7):
-            di = (today_idx + offset) % 7
-            key = day_keys[di]
-            alarm = cfg.get(key)
-            if alarm is None:
-                continue
-            enabled = alarm.get("enabled", False)
-            if not enabled:
-                continue
-            try:
-                hh = int(alarm.get("hour", 0))
-                mm = int(alarm.get("minute", 0))
-            except Exception:
-                continue
-            if offset == 0:
-                # today: only if alarm time is still in future
-                if hh > cur_h or (hh == cur_h and mm > cur_m):
-                    return ("", hh, mm)
-            else:
-                return (day_abbr[di], hh, mm)
-        return None
+        day_str = nxt.get("day", "")
+        if nxt.get("key") == DAY_KEYS[(int(t[6]) - 1) % 7]:
+            day_str = ""
+        return (day_str, int(nxt.get("hour", 0)), int(nxt.get("minute", 0)))
 
     def _draw_alarm_icon(self, x, y):
         # 8x8 pixel alarm bell icon
@@ -4303,6 +4306,8 @@ class App:
                     self.display.text(alarm_text, 10, 44, 1)
                 else:
                     self.display.text("--:--", 10, 44, 1)
+                if self._skip_once_alarm is not None:
+                    self.display.text("SKIP1X", 80, 44, 1)
             # Day + date lines
             self.display.text(self._weekday_short(t[6]), 0, 56, 1)
             self.display.text("{:02d}-{:02d}".format(t[2], t[1]), 24, 56, 1)
@@ -4366,6 +4371,8 @@ class App:
                 self.display.text("{} {:02d}:{:02d}".format(day_str, ah, am), 10, 44, 1)
             else:
                 self.display.text("--:--", 10, 44, 1)
+            if self._skip_once_alarm is not None:
+                self.display.text("SKIP1X", 80, 44, 1)
             self.display.text(self._weekday_short(t[6]), 0, 56, 1)
             self.display.text("{:02d}-{:02d}".format(t[2], t[1]), 24, 56, 1)
             self._draw_weather_overlay(t)

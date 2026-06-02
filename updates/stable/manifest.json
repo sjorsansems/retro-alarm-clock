@@ -1,7 +1,7 @@
 {
-  "version": "6.1.7",
+  "version": "6.1.8",
   "channel": "stable",
-  "notes": "Level 1 Space Game now uses clearer Phoenix-like bird waves for immediate visual recognition",
+  "notes": "Button handling hardened against ghost presses from power-line interference while keeping fast game responsiveness",
   "files": [
     {
       "path": "retro_georgy_alarm_klok_v6.py",
